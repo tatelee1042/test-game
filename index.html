@@ -3,13 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Test Game" />
-    <title>Test Game</title>
+    <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
+    <title>Daily Spellbook — Puzzle Board</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
-      <h1>hello</h1>
+    <main class="game-board" aria-label="Magic puzzle board">
+      <section class="player-side opponent" aria-labelledby="opponent-name">
+        <header class="player-bar">
+          <div class="player-identity">
+            <span class="turn-marker" aria-hidden="true"></span>
+            <div>
+              <p class="eyebrow">Opponent</p>
+              <h1 id="opponent-name">Enemy Planeswalker</h1>
+            </div>
+          </div>
+          <div class="life-total" aria-label="Opponent life total">
+            <span>HP</span>
+            <strong>20</strong>
+          </div>
+        </header>
+
+        <div class="play-area">
+          <aside class="card-piles" aria-label="Opponent card piles">
+            <div class="zone card-zone">
+              <span class="zone-count">0</span>
+              <span class="zone-label">Graveyard</span>
+            </div>
+            <div class="zone card-zone library">
+              <span class="zone-count">40</span>
+              <span class="zone-label">Library</span>
+            </div>
+          </aside>
+          <div class="battlefield-zone">
+            <span class="zone-label">Enemy battlefield</span>
+            <span class="zone-hint">Cards in play</span>
+          </div>
+        </div>
+
+        <div class="hand-zone" aria-label="Opponent hand">
+          <span class="zone-label">Opponent hand</span>
+          <span class="card-count">7 cards</span>
+        </div>
+      </section>
+
+      <div class="turn-divider" aria-hidden="true">
+        <span></span>
+        <div class="turn-badge">Daily puzzle</div>
+        <span></span>
+      </div>
+
+      <section class="player-side player" aria-labelledby="player-name">
+        <div class="hand-zone" aria-label="Your hand">
+          <span class="zone-label">Your hand</span>
+          <span class="card-count">7 cards</span>
+        </div>
+
+        <div class="play-area">
+          <div class="battlefield-zone">
+            <span class="zone-label">Your battlefield</span>
+            <span class="zone-hint">Cards in play</span>
+          </div>
+          <aside class="card-piles" aria-label="Your card piles">
+            <div class="zone card-zone library">
+              <span class="zone-count">40</span>
+              <span class="zone-label">Library</span>
+            </div>
+            <div class="zone card-zone">
+              <span class="zone-count">0</span>
+              <span class="zone-label">Graveyard</span>
+            </div>
+          </aside>
+        </div>
+
+        <header class="player-bar">
+          <div class="player-identity">
+            <span class="turn-marker active" aria-hidden="true"></span>
+            <div>
+              <p class="eyebrow">You · Your turn</p>
+              <h2 id="player-name">Player Planeswalker</h2>
+            </div>
+          </div>
+          <div class="life-total" aria-label="Your life total">
+            <span>HP</span>
+            <strong>20</strong>
+          </div>
+        </header>
+      </section>
     </main>
   </body>
 </html>
