@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=6" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -24,56 +24,64 @@
           </div>
         </header>
 
+        <div class="hand-zone drop-zone" data-zone="opponent-hand" aria-label="Opponent hand" tabindex="0">
+          <span class="zone-label">Opponent hand</span>
+          <span class="card-count">7 cards</span>
+        </div>
+
         <div class="play-area">
           <aside class="card-piles" aria-label="Opponent card piles">
-            <div class="zone card-zone">
+            <div class="zone card-zone drop-zone" data-zone="opponent-graveyard" tabindex="0">
               <span class="zone-count">0</span>
               <span class="zone-label">Graveyard</span>
             </div>
-            <div class="zone card-zone library">
+            <div class="zone card-zone library drop-zone" data-zone="opponent-library" tabindex="0">
               <span class="zone-count">40</span>
               <span class="zone-label">Library</span>
             </div>
           </aside>
-          <div class="battlefield-zone">
+          <div class="battlefield-zone drop-zone" data-zone="opponent-battlefield" tabindex="0">
             <span class="zone-label">Enemy battlefield</span>
             <span class="zone-hint">Cards in play</span>
           </div>
         </div>
 
-        <div class="hand-zone" aria-label="Opponent hand">
-          <span class="zone-label">Opponent hand</span>
-          <span class="card-count">7 cards</span>
-        </div>
       </section>
 
-      <div class="turn-divider" aria-hidden="true">
-        <span></span>
-        <div class="turn-badge">Daily puzzle</div>
-        <span></span>
-      </div>
+      <nav class="turn-divider" aria-label="Turn phases">
+        <ol class="phase-list">
+          <li class="phase-step active" aria-current="step">Untap</li>
+          <li class="phase-step">Upkeep</li>
+          <li class="phase-step">Draw</li>
+          <li class="phase-step">Main 1</li>
+          <li class="phase-step">Combat</li>
+          <li class="phase-step">Main 2</li>
+          <li class="phase-step">End</li>
+        </ol>
+        <button class="next-phase" type="button">Next phase <span aria-hidden="true">→</span></button>
+      </nav>
 
       <section class="player-side player" aria-labelledby="player-name">
-        <div class="hand-zone" aria-label="Your hand">
-          <span class="zone-label">Your hand</span>
-          <span class="card-count">7 cards</span>
-        </div>
-
         <div class="play-area">
-          <div class="battlefield-zone">
+          <div class="battlefield-zone drop-zone" data-zone="player-battlefield" tabindex="0">
             <span class="zone-label">Your battlefield</span>
             <span class="zone-hint">Cards in play</span>
           </div>
           <aside class="card-piles" aria-label="Your card piles">
-            <div class="zone card-zone library">
+            <div class="zone card-zone library drop-zone" data-zone="player-library" tabindex="0">
               <span class="zone-count">40</span>
               <span class="zone-label">Library</span>
             </div>
-            <div class="zone card-zone">
+            <div class="zone card-zone drop-zone" data-zone="player-graveyard" tabindex="0">
               <span class="zone-count">0</span>
               <span class="zone-label">Graveyard</span>
             </div>
           </aside>
+        </div>
+
+        <div class="hand-zone drop-zone" data-zone="player-hand" aria-label="Your hand" tabindex="0">
+          <span class="zone-label">Your hand</span>
+          <span class="card-count">7 cards</span>
         </div>
 
         <header class="player-bar">
@@ -84,6 +92,12 @@
               <h2 id="player-name">Player Planeswalker</h2>
             </div>
           </div>
+          <div class="mana-console" aria-label="Your mana pool">
+            <span class="mana-console-label">Mana pool</span>
+            <div class="mana-pool" role="status">Empty</div>
+            <button class="clear-mana" type="button">Clear</button>
+            <button class="untap-all" type="button">Untap</button>
+          </div>
           <div class="life-total" aria-label="Your life total">
             <span>HP</span>
             <strong>20</strong>
@@ -91,5 +105,71 @@
         </header>
       </section>
     </main>
+
+    <div class="edit-controls">
+      <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
+      <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
+    </div>
+    <div class="edit-mode-banner" role="status" hidden>Editing mode · Cards are unlocked</div>
+    <div class="drawer-backdrop" hidden></div>
+    <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Scryfall database</p>
+          <h2 id="import-title">Import a card</h2>
+        </div>
+        <button class="close-drawer" type="button" aria-label="Close card importer">×</button>
+      </header>
+      <form class="card-search" role="search">
+        <label for="card-query">Card name or Scryfall search</label>
+        <div class="search-row">
+          <input id="card-query" name="query" type="search" placeholder="Try: Lightning Bolt" autocomplete="off" required />
+          <button type="submit">Search</button>
+        </div>
+      </form>
+      <div class="search-status" role="status">Search Scryfall, then choose a card.</div>
+      <div class="search-results" aria-label="Card search results"></div>
+      <footer class="drawer-footer">Card data and images provided by <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a>.</footer>
+    </aside>
+
+    <div class="placement-toast" role="status" hidden>
+      <img alt="" />
+      <span>Choose any highlighted zone</span>
+      <button type="button">Cancel</button>
+    </div>
+    <div class="game-message" role="status" hidden></div>
+
+    <script src="app.js?v=6" defer></script>
+    <script>
+      const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
+      const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
+      let activePhaseIndex = 0;
+
+      function paintActivePhase() {
+        turnPhaseSteps.forEach((step, index) => {
+          const active = index === activePhaseIndex;
+          step.classList.toggle("active", active);
+          step.removeAttribute("aria-current");
+          if (active) {
+            step.setAttribute("aria-current", "step");
+            step.classList.remove("phase-enter");
+            requestAnimationFrame(() => step.classList.add("phase-enter"));
+          }
+        });
+      }
+
+      document.querySelector(".next-phase").addEventListener("click", () => {
+        document.querySelector(".clear-mana")?.click();
+        activePhaseIndex = (activePhaseIndex + 1) % turnPhases.length;
+        if (activePhaseIndex === 0) document.querySelector(".untap-all")?.click();
+        paintActivePhase();
+        const status = document.querySelector(".game-message");
+        status.textContent = `Advanced to ${turnPhases[activePhaseIndex]}.`;
+        status.dataset.tone = "success";
+        status.hidden = false;
+      });
+
+      paintActivePhase();
+    </script>
   </body>
 </html>
