@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=24" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -20,7 +20,9 @@
           </div>
           <div class="life-total" aria-label="Opponent life total">
             <span>HP</span>
-            <strong>20</strong>
+            <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease opponent HP" disabled>−</button>
+            <input class="life-input" type="number" value="20" min="0" max="999" aria-label="Opponent HP" disabled />
+            <button class="life-adjust" type="button" data-delta="1" aria-label="Increase opponent HP" disabled>+</button>
           </div>
         </header>
 
@@ -96,11 +98,12 @@
             <span class="mana-console-label">Mana pool</span>
             <div class="mana-pool" role="status">Empty</div>
             <button class="clear-mana" type="button">Clear</button>
-            <button class="untap-all" type="button">Untap</button>
           </div>
           <div class="life-total" aria-label="Your life total">
             <span>HP</span>
-            <strong>20</strong>
+            <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease your HP" disabled>−</button>
+            <input class="life-input" type="number" value="20" min="0" max="999" aria-label="Your HP" disabled />
+            <button class="life-adjust" type="button" data-delta="1" aria-label="Increase your HP" disabled>+</button>
           </div>
         </header>
       </section>
@@ -138,14 +141,41 @@
       <button type="button">Cancel</button>
     </div>
     <div class="game-message" role="status" hidden></div>
+    <div class="card-hover-preview" aria-hidden="true" hidden><img alt="" /></div>
+    <div class="combat-prompt" role="status" hidden>
+      <strong>Choose who this creature attacks</strong>
+      <span class="combat-attacker-name"></span>
+      <div class="combat-target-options"></div>
+    </div>
 
-    <script src="app.js?v=6" defer></script>
+    <div class="spell-stack-backdrop" hidden></div>
+    <aside class="spell-stack" role="dialog" aria-modal="true" aria-labelledby="spell-stack-title" hidden>
+      <img class="spell-stack-image" alt="" />
+      <div class="spell-stack-copy">
+        <p class="eyebrow">Spell on the stack</p>
+        <h2 id="spell-stack-title">Resolve spell</h2>
+        <p class="spell-stack-meta"></p>
+        <div class="spell-oracle-text"></div>
+        <div class="spell-target-prompt" role="status" hidden>
+          <strong>Choose a target</strong>
+          <span>Select a highlighted player or card on the board.</span>
+          <div class="spell-target-options" aria-label="Eligible targets"></div>
+        </div>
+        <p class="spell-resolution-note">Make any choices described by the card, then resolve its effect.</p>
+        <button class="resolve-spell" type="button">Resolve effect</button>
+      </div>
+    </aside>
+
+    <script src="app.js?v=24" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
       let activePhaseIndex = 0;
+      let activeTurnNumber = 1;
 
       function paintActivePhase() {
+        window.currentTurnPhase = turnPhases[activePhaseIndex];
+        window.currentTurnNumber = activeTurnNumber;
         turnPhaseSteps.forEach((step, index) => {
           const active = index === activePhaseIndex;
           step.classList.toggle("active", active);
@@ -156,12 +186,18 @@
             requestAnimationFrame(() => step.classList.add("phase-enter"));
           }
         });
+        document.dispatchEvent(new CustomEvent("turn:phasechange", { detail: { phase: window.currentTurnPhase } }));
       }
 
       document.querySelector(".next-phase").addEventListener("click", () => {
+        if (window.currentTurnPhase === "Combat phase" && window.finishCombatAttackers?.()) return;
         document.querySelector(".clear-mana")?.click();
         activePhaseIndex = (activePhaseIndex + 1) % turnPhases.length;
-        if (activePhaseIndex === 0) document.querySelector(".untap-all")?.click();
+        if (activePhaseIndex === 0) {
+          activeTurnNumber += 1;
+          window.currentTurnNumber = activeTurnNumber;
+          document.dispatchEvent(new CustomEvent("turn:untap"));
+        }
         paintActivePhase();
         const status = document.querySelector(".game-message");
         status.textContent = `Advanced to ${turnPhases[activePhaseIndex]}.`;
