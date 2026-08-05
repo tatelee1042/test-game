@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=24" />
+    <link rel="stylesheet" href="styles.css?v=36" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -16,6 +16,10 @@
             <div>
               <p class="eyebrow">Opponent</p>
               <h1 id="opponent-name">Enemy Planeswalker</h1>
+            </div>
+            <div class="player-counters" aria-label="Opponent counters">
+              <span class="player-counter poison-counter" data-counter="poison" data-value="0" hidden>Poison 0</span>
+              <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
             </div>
           </div>
           <div class="life-total" aria-label="Opponent life total">
@@ -36,6 +40,11 @@
             <div class="zone card-zone drop-zone" data-zone="opponent-graveyard" tabindex="0">
               <span class="zone-count">0</span>
               <span class="zone-label">Graveyard</span>
+              <button class="view-graveyard" type="button" hidden>View graveyard</button>
+            </div>
+            <div class="zone card-zone exile-zone drop-zone" data-zone="opponent-exile" tabindex="0">
+              <span class="zone-count">0</span>
+              <span class="zone-label">Exile</span>
             </div>
             <div class="zone card-zone library drop-zone" data-zone="opponent-library" tabindex="0">
               <span class="zone-count">40</span>
@@ -77,6 +86,11 @@
             <div class="zone card-zone drop-zone" data-zone="player-graveyard" tabindex="0">
               <span class="zone-count">0</span>
               <span class="zone-label">Graveyard</span>
+              <button class="view-graveyard" type="button" hidden>View graveyard</button>
+            </div>
+            <div class="zone card-zone exile-zone drop-zone" data-zone="player-exile" tabindex="0">
+              <span class="zone-count">0</span>
+              <span class="zone-label">Exile</span>
             </div>
           </aside>
         </div>
@@ -92,6 +106,10 @@
             <div>
               <p class="eyebrow">You · Your turn</p>
               <h2 id="player-name">Player Planeswalker</h2>
+            </div>
+            <div class="player-counters" aria-label="Your counters">
+              <span class="player-counter poison-counter" data-counter="poison" data-value="0" hidden>Poison 0</span>
+              <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
             </div>
           </div>
           <div class="mana-console" aria-label="Your mana pool">
@@ -112,8 +130,10 @@
     <div class="edit-controls">
       <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
       <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
+      <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
+      <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
     </div>
-    <div class="edit-mode-banner" role="status" hidden>Editing mode · Cards are unlocked</div>
+    <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus a creature and press T to tap</div>
     <div class="drawer-backdrop" hidden></div>
     <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">
       <header class="drawer-header">
@@ -135,6 +155,19 @@
       <footer class="drawer-footer">Card data and images provided by <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a>.</footer>
     </aside>
 
+    <div class="save-manager-backdrop" hidden></div>
+    <aside class="save-manager" role="dialog" aria-modal="true" aria-labelledby="save-manager-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Local board storage</p>
+          <h2 id="save-manager-title">Board saves</h2>
+        </div>
+        <button class="close-save-manager" type="button" aria-label="Close board saves">×</button>
+      </header>
+      <p class="save-manager-copy">Choose one of 10 slots. Saves stay in this browser on this computer.</p>
+      <div class="save-slot-list"></div>
+    </aside>
+
     <div class="placement-toast" role="status" hidden>
       <img alt="" />
       <span>Choose any highlighted zone</span>
@@ -142,6 +175,26 @@
     </div>
     <div class="game-message" role="status" hidden></div>
     <div class="card-hover-preview" aria-hidden="true" hidden><img alt="" /></div>
+    <div class="graveyard-viewer-backdrop" hidden></div>
+    <aside class="graveyard-viewer" role="dialog" aria-modal="true" aria-labelledby="graveyard-viewer-title" hidden>
+      <header class="drawer-header">
+        <div><p class="eyebrow">Zone inspection</p><h2 id="graveyard-viewer-title">Graveyard</h2></div>
+        <button class="close-graveyard-viewer" type="button" aria-label="Close graveyard">×</button>
+      </header>
+      <div class="graveyard-viewer-cards"></div>
+    </aside>
+    <div class="trigger-viewer-backdrop" hidden></div>
+    <aside class="trigger-viewer" role="dialog" aria-modal="true" aria-labelledby="trigger-viewer-title" hidden>
+      <img class="trigger-source-image" alt="" />
+      <div>
+        <p class="eyebrow">Triggered ability</p>
+        <h2 id="trigger-viewer-title">Ability triggered</h2>
+        <p class="trigger-condition"></p>
+        <div class="trigger-effect"></div>
+        <div class="trigger-target-options"></div>
+        <button class="resolve-trigger" type="button">Resolve ability</button>
+      </div>
+    </aside>
     <div class="combat-prompt" role="status" hidden>
       <strong>Choose who this creature attacks</strong>
       <span class="combat-attacker-name"></span>
@@ -166,7 +219,7 @@
       </div>
     </aside>
 
-    <script src="app.js?v=24" defer></script>
+    <script src="app.js?v=36" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
@@ -188,6 +241,14 @@
         });
         document.dispatchEvent(new CustomEvent("turn:phasechange", { detail: { phase: window.currentTurnPhase } }));
       }
+
+      window.setTurnState = (phase, turnNumber = 1) => {
+        const phaseIndex = turnPhases.indexOf(phase);
+        if (phaseIndex < 0) return;
+        activePhaseIndex = phaseIndex;
+        activeTurnNumber = Math.max(1, Number(turnNumber) || 1);
+        paintActivePhase();
+      };
 
       document.querySelector(".next-phase").addEventListener("click", () => {
         if (window.currentTurnPhase === "Combat phase" && window.finishCombatAttackers?.()) return;
