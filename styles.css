@@ -69,12 +69,12 @@ input {
 }
 
 .opponent {
-  grid-template-rows: auto 118px minmax(0, 1fr);
+  grid-template-rows: auto 68px minmax(0, 1fr);
   background: linear-gradient(180deg, rgba(78, 19, 23, 0.24), transparent 72%);
 }
 
 .player {
-  grid-template-rows: minmax(0, 1fr) 118px auto;
+  grid-template-rows: minmax(0, 1fr) 68px auto;
   background: linear-gradient(0deg, rgba(16, 51, 55, 0.46), transparent 74%);
 }
 
@@ -308,6 +308,28 @@ h2 {
   grid-template-columns: minmax(0, 1fr) 122px;
 }
 
+.battlefield-shell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.battlefield-heading {
+  padding-inline: 4px;
+  color: #d4cbb7;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.player .battlefield-heading {
+  text-align: right;
+}
+
 .card-piles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -395,6 +417,8 @@ h2 {
 
 .battlefield-zone {
   display: grid;
+  min-height: 0;
+  flex: 1;
   place-content: center;
   border-style: dashed;
   border-radius: 9px;
@@ -423,12 +447,6 @@ h2 {
   transform: translateY(-50%) rotate(5deg);
 }
 
-.zone-hint {
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 0.64rem;
-}
-
 .hand-zone {
   display: flex;
   align-items: center;
@@ -439,12 +457,7 @@ h2 {
 }
 
 .player .hand-zone {
-  border-radius: 7px 7px 50% 50% / 7px 7px 35% 35%;
-}
-
-.card-count {
-  color: var(--muted);
-  font-size: 0.65rem;
+  border-radius: 7px;
 }
 
 .turn-divider {
@@ -925,6 +938,36 @@ h2 {
   gap: 8px;
 }
 
+.hand-zone:has(.board-card) {
+  --hand-card-visible-height: 63px;
+  overflow: visible;
+  align-items: flex-start;
+  padding-block: 3px 0;
+}
+
+.hand-zone .board-card {
+  height: clamp(108px, 15.5vh, 142px);
+  max-height: none;
+  clip-path: inset(0 0 calc(100% - var(--hand-card-visible-height)) 0 round 5px);
+  transform: translateY(0);
+  transform-origin: top center;
+  transition: transform 260ms cubic-bezier(0.2, 0.82, 0.25, 1), clip-path 220ms ease, filter 180ms ease;
+}
+
+.hand-zone .board-card:not(.dragging):not(.pointer-dragging):hover,
+.hand-zone .board-card:not(.dragging):not(.pointer-dragging):focus-visible {
+  z-index: 45;
+  clip-path: inset(0 round 5px);
+  transform: translateY(calc(-50% - 5px));
+  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 12px rgba(211, 170, 88, 0.32));
+}
+
+.hand-zone .board-card.dragging,
+.hand-zone .board-card.pointer-dragging {
+  clip-path: none;
+  transition: none;
+}
+
 .card-zone:has(.board-card) {
   justify-content: center;
   padding: 4px;
@@ -1094,6 +1137,59 @@ h2 {
   border-radius: 5px;
   filter: drop-shadow(0 5px 6px rgba(0, 0, 0, 0.5));
   cursor: default;
+}
+
+.battlefield-zone > .board-card.mountain-land {
+  position: absolute;
+  z-index: calc(20 + var(--mountain-stack-index, 0));
+  right: calc(8px + var(--mountain-stack-offset, 0px));
+  bottom: 8px;
+  margin: 0;
+}
+
+.board-card.single-mana-land:not(.tapped) {
+  cursor: pointer;
+}
+
+.board-card.has-activated-ability {
+  cursor: pointer;
+}
+
+.board-card.has-activated-ability:hover {
+  outline: 2px solid rgba(111, 199, 161, 0.76);
+  outline-offset: 2px;
+}
+
+.board-card.has-activated-ability::before {
+  position: absolute;
+  z-index: 8;
+  top: 4px;
+  right: 4px;
+  padding: 3px 5px;
+  content: "Ability";
+  border: 1px solid rgba(111, 199, 161, 0.72);
+  border-radius: 999px;
+  color: #dffff2;
+  background: rgba(20, 77, 64, 0.92);
+  font-size: 0.48rem;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.board-card.legal-ability-cost {
+  outline: 3px solid rgba(116, 218, 193, 0.82);
+  outline-offset: 3px;
+  filter: drop-shadow(0 0 14px rgba(116, 218, 193, 0.6));
+}
+
+.board-card.chosen-ability-cost {
+  outline-color: var(--gold-bright);
+  filter: brightness(1.12) drop-shadow(0 0 18px rgba(242, 210, 138, 0.78));
+}
+
+.board-card.single-mana-land:not(.tapped):hover {
+  outline: 2px solid rgba(242, 210, 138, 0.78);
+  outline-offset: 2px;
 }
 
 .editing-mode .board-card {
@@ -1725,11 +1821,15 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
 
   .opponent,
   .player {
-    grid-template-rows: auto 78px minmax(0, 1fr);
+    grid-template-rows: auto 56px minmax(0, 1fr);
   }
 
   .player {
-    grid-template-rows: minmax(0, 1fr) 78px auto;
+    grid-template-rows: minmax(0, 1fr) 56px auto;
+  }
+
+  .hand-zone:has(.board-card) {
+    --hand-card-visible-height: 51px;
   }
 
   .play-area,
@@ -1846,6 +1946,10 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
 
   .player {
     grid-template-rows: minmax(0, 1fr) 64px auto;
+  }
+
+  .hand-zone:has(.board-card) {
+    --hand-card-visible-height: 59px;
   }
 
   .player-bar {

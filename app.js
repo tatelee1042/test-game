@@ -54,6 +54,7 @@ const closeGraveyardViewerButton = document.querySelector(".close-graveyard-view
 const graveyardZones = [...document.querySelectorAll('[data-zone$="graveyard"]')];
 const triggerViewer = document.querySelector(".trigger-viewer");
 const triggerViewerBackdrop = document.querySelector(".trigger-viewer-backdrop");
+const triggerViewerKind = document.querySelector(".trigger-viewer-kind");
 const triggerSourceImage = document.querySelector(".trigger-source-image");
 const triggerViewerTitle = document.querySelector("#trigger-viewer-title");
 const triggerCondition = document.querySelector(".trigger-condition");
@@ -82,6 +83,8 @@ const SAVE_STORAGE_KEY = "daily-spellbook-board-saves-v1";
 const SAVE_SLOT_COUNT = 10;
 let triggerQueue = [];
 let activeTrigger = null;
+let activeAbilitySource = null;
+let pendingAbilityPayment = null;
 const manaPool = Object.fromEntries(MANA_TYPES.map((type) => [type, 0]));
 
 function cardImage(card) {
@@ -330,6 +333,7 @@ function clearManaPool() {
 
 function addMana(type, source) {
   if (!MANA_TYPES.includes(type)) return;
+  if (source.classList.contains("tapped")) return;
   manaPool[type] += 1;
   source.classList.add("tapped");
   source.querySelectorAll(".mana-choice").forEach((button) => {
@@ -338,6 +342,22 @@ function addMana(type, source) {
   renderManaPool();
   showMessage(`${source.dataset.cardName} added {${type}}.`, "success");
 }
+
+function arrangeMountainStacks() {
+  document.querySelectorAll('[data-zone$="battlefield"]').forEach((battlefield) => {
+    [...battlefield.querySelectorAll(":scope > .board-card")].forEach((card) => {
+      const isMountain = /(?:^|—|\/\/).*\bMountain\b/i.test(card.dataset.typeLine || "");
+      card.classList.toggle("mountain-land", isMountain);
+      if (!isMountain) card.style.removeProperty("--mountain-stack-index");
+    });
+    [...battlefield.querySelectorAll(":scope > .mountain-land")].forEach((mountain, index) => {
+      mountain.style.setProperty("--mountain-stack-index", String(index));
+      mountain.style.setProperty("--mountain-stack-offset", `${index * mountain.getBoundingClientRect().width * 0.5}px`);
+    });
+  });
+}
+
+window.addEventListener("resize", arrangeMountainStacks);
 
 function untapAllPermanents(announce = true) {
   let stunCountersRemoved = 0;
@@ -706,6 +726,7 @@ function closeImporter() {
 }
 
 function setEditingMode(enabled) {
+  if (enabled && activeAbilitySource) closeActivatedAbilityMenu();
   editingMode = enabled;
   document.body.classList.toggle("editing-mode", enabled);
   importer.editToggle.setAttribute("aria-pressed", String(enabled));
@@ -972,6 +993,86 @@ function effectiveActivatedAbilityCost(sourceCard, printedCost) {
   return cost;
 }
 
+function activatedAbilitiesFor(card) {
+  return (card.dataset.oracleText || "").split("\n").flatMap((line) => {
+    const match = line.trim().match(/^(.+?):\s*(.+)$/);
+    if (!match) return [];
+    return [{ cost: match[1].trim(), effect: match[2].trim() }];
+  });
+}
+
+function permanentCostRequirement(cost, source) {
+  const match = cost.match(/\b(tap|sacrifice|return|exile)\s+(?:(a|an|one|two|three|four|five|\d+)\s+)?(?:(other|another)\s+)?(?:(untapped)\s+)?([a-z]+)\s+you control(?:\s+to its owner[’']s hand)?/i)
+    || cost.match(/\b(sacrifice|exile)\s+(?:(a|an|one|two|three|four|five|\d+)\s+)?(?:(other|another)\s+)?(?:(untapped)\s+)?([a-z]+)\b/i);
+  if (!match) return null;
+  const action = match[1].toLowerCase();
+  const amount = match[2] || "a";
+  const excludesSource = Boolean(match[3]);
+  const requiresUntapped = Boolean(match[4]) || action === "tap";
+  const rawKind = match[5].toLowerCase();
+  const kind = ({ creatures: "creature", artifacts: "artifact", lands: "land", permanents: "permanent", elves: "elf" })[rawKind]
+    || rawKind.replace(/s$/, "");
+  const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  const candidates = [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)].filter((card) => {
+    if (excludesSource && card === source) return false;
+    if (kind !== "permanent" && !card.dataset.typeLine.toLowerCase().includes(kind)) return false;
+    if (requiresUntapped && card.classList.contains("tapped")) return false;
+    return true;
+  });
+  return { action, count: counterAmount(amount), excludesSource, requiresUntapped, kind, candidates, matchedText: match[0] };
+}
+
+function payActivatedAbilityCost(source, printedCost, selectedPermanents = []) {
+  const permanentRequirement = permanentCostRequirement(printedCost, source);
+  if (permanentRequirement) {
+    const legalSelections = selectedPermanents.filter((card) => permanentRequirement.candidates.includes(card));
+    if (legalSelections.length !== permanentRequirement.count) {
+      return { paid: false, reason: `Choose ${permanentRequirement.count} legal ${permanentRequirement.kind}${permanentRequirement.count === 1 ? "" : "s"} to pay this cost.` };
+    }
+  }
+  const symbols = parseCost(printedCost);
+  if (symbols.includes("Q")) return { paid: false, reason: "Untap-symbol costs are not supported yet." };
+  const requiresTap = symbols.includes("T");
+  if (requiresTap && source.classList.contains("tapped")) return { paid: false, reason: `${source.dataset.cardName} is already tapped.` };
+  if (requiresTap && source.dataset.typeLine.includes("Creature") && source.classList.contains("summoning-sick") && !cardHasHaste(source)) {
+    return { paid: false, reason: `${source.dataset.cardName} has summoning sickness and cannot pay a {T} cost.` };
+  }
+
+  const lifeMatch = printedCost.match(/pay\s+(\d+)\s+life/i);
+  const unsupported = printedCost
+    .replace(permanentRequirement?.matchedText || /$^/, "")
+    .replace(/\{[^}]+\}/g, "")
+    .replace(/pay\s+\d+\s+life/ig, "")
+    .replace(/[,.\s]/g, "");
+  if (unsupported) return { paid: false, reason: `This ability uses an unsupported cost: ${printedCost}.` };
+
+  const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  const lifeInput = document.querySelector(`.${controller} .life-input`);
+  const lifePayment = Number(lifeMatch?.[1] || 0);
+  if (lifePayment && Number(lifeInput.value) < lifePayment) return { paid: false, reason: `You cannot pay ${lifePayment} life.` };
+
+  const manaSymbols = symbols.filter((symbol) => !["T", "Q"].includes(symbol));
+  const printedManaCost = manaSymbols.map((symbol) => `{${symbol}}`).join("") || "{0}";
+  const manaCost = effectiveActivatedAbilityCost(source, printedManaCost);
+  if (manaCost !== "{0}") {
+    const payment = spendManaFor(manaCost);
+    if (!payment.paid) return payment;
+  }
+  if (lifePayment) lifeInput.value = String(Number(lifeInput.value) - lifePayment);
+  if (requiresTap) source.classList.add("tapped");
+  if (permanentRequirement) {
+    selectedPermanents.forEach((card) => {
+      if (permanentRequirement.action === "tap") card.classList.add("tapped");
+      if (permanentRequirement.action === "sacrifice") document.querySelector(`[data-zone="${controller}-graveyard"]`).append(card);
+      if (permanentRequirement.action === "return") document.querySelector(`[data-zone="${controller}-hand"]`).append(card);
+      if (permanentRequirement.action === "exile") document.querySelector(`[data-zone="${controller}-exile"]`).append(card);
+      refreshCardState(card);
+    });
+  }
+  refreshCardState(source);
+  return { paid: true, manaCost, printedManaCost };
+}
+
 function spendManaFor(cost) {
   const symbols = parseCost(cost);
   if (symbols.some((symbol) => symbol === "X" || symbol === "S")) {
@@ -1199,23 +1300,17 @@ function emitGameEvent(eventName, context = {}) {
   showNextTriggeredAbility();
 }
 
-function showNextTriggeredAbility() {
-  if (activeTrigger || !triggerQueue.length) return;
-  activeTrigger = triggerQueue.shift();
-  triggerSourceImage.src = activeTrigger.source.querySelector("img")?.src || "";
-  triggerSourceImage.alt = activeTrigger.source.dataset.cardName;
-  triggerViewerTitle.textContent = activeTrigger.source.dataset.cardName;
-  triggerCondition.textContent = `${activeTrigger.word} ${activeTrigger.condition}…`;
-  triggerEffect.textContent = activeTrigger.effect;
+function renderAbilityTargets() {
   triggerTargetOptions.replaceChildren();
+  resolveTriggerButton.dataset.mode = "resolve";
   resolveTriggerButton.textContent = "Resolve ability";
-
   const requiredTargets = targetCountFor(activeTrigger.effect);
   const candidates = requiredTargets ? eligibleTargetsFor(activeTrigger.effect) : [];
   candidates.forEach((candidate) => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = targetLabel(candidate);
+    button.targetElement = candidate;
     button.addEventListener("click", () => {
       activeTrigger.targets = [candidate];
       triggerTargetOptions.querySelectorAll("button").forEach((option) => option.classList.toggle("selected", option === button));
@@ -1225,12 +1320,131 @@ function showNextTriggeredAbility() {
   });
   resolveTriggerButton.disabled = requiredTargets > 0 && candidates.length > 0;
   if (requiredTargets && !candidates.length) resolveTriggerButton.textContent = "Dismiss — no legal targets";
+}
+
+function closeActivatedAbilityMenu() {
+  document.querySelectorAll(".legal-ability-cost, .chosen-ability-cost").forEach((card) => card.classList.remove("legal-ability-cost", "chosen-ability-cost"));
+  activeAbilitySource = null;
+  pendingAbilityPayment = null;
+  activeTrigger = null;
+  triggerViewer.hidden = true;
+  triggerViewerBackdrop.hidden = true;
+  resolveTriggerButton.dataset.mode = "resolve";
+  showNextTriggeredAbility();
+}
+
+function showPermanentCostChoices(source, ability, requirement) {
+  pendingAbilityPayment = { source, ability, requirement, selected: [] };
+  triggerViewerKind.textContent = "Pay ability cost";
+  triggerCondition.textContent = `Choose ${requirement.count} ${requirement.requiresUntapped ? "untapped " : ""}${requirement.kind}${requirement.count === 1 ? "" : "s"} to ${requirement.action}.`;
+  triggerEffect.textContent = ability.effect;
+  triggerTargetOptions.replaceChildren();
+  requirement.candidates.forEach((candidate) => {
+    candidate.classList.add("legal-ability-cost");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = targetLabel(candidate);
+    button.addEventListener("click", () => {
+      const index = pendingAbilityPayment.selected.indexOf(candidate);
+      if (index >= 0) pendingAbilityPayment.selected.splice(index, 1);
+      else if (pendingAbilityPayment.selected.length < requirement.count) pendingAbilityPayment.selected.push(candidate);
+      candidate.classList.toggle("chosen-ability-cost", pendingAbilityPayment.selected.includes(candidate));
+      triggerTargetOptions.querySelectorAll("button").forEach((option) => {
+        option.classList.toggle("selected", pendingAbilityPayment.selected.includes(option.targetElement));
+      });
+      resolveTriggerButton.disabled = pendingAbilityPayment.selected.length !== requirement.count;
+      resolveTriggerButton.textContent = `Pay cost (${pendingAbilityPayment.selected.length}/${requirement.count})`;
+    });
+    triggerTargetOptions.append(button);
+  });
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.textContent = "Cancel";
+  cancelButton.addEventListener("click", closeActivatedAbilityMenu);
+  triggerTargetOptions.append(cancelButton);
+  resolveTriggerButton.dataset.mode = "ability-cost-targets";
+  resolveTriggerButton.textContent = `Pay cost (0/${requirement.count})`;
+  resolveTriggerButton.disabled = true;
+  if (!requirement.candidates.length) {
+    resolveTriggerButton.textContent = "No legal permanent available";
+    showMessage(`No legal ${requirement.kind} is available to pay this ability's cost.`, "error");
+  }
+}
+
+function beginActivatedAbility(source, ability, selectedPermanents = null) {
+  const permanentRequirement = permanentCostRequirement(ability.cost, source);
+  if (permanentRequirement && selectedPermanents === null) {
+    showPermanentCostChoices(source, ability, permanentRequirement);
+    return;
+  }
+  const payment = payActivatedAbilityCost(source, ability.cost, selectedPermanents || []);
+  if (!payment.paid) {
+    showMessage(payment.reason, "error");
+    return;
+  }
+  document.querySelectorAll(".legal-ability-cost, .chosen-ability-cost").forEach((card) => card.classList.remove("legal-ability-cost", "chosen-ability-cost"));
+  pendingAbilityPayment = null;
+  activeAbilitySource = null;
+  activeTrigger = { source, effect: ability.effect, cost: ability.cost, targets: [], context: {}, type: "activated" };
+  triggerViewerKind.textContent = "Activated ability";
+  triggerCondition.textContent = `${ability.cost} paid`;
+  triggerEffect.textContent = ability.effect;
+  renderAbilityTargets();
+  resolveTriggerButton.focus();
+  showMessage(`${source.dataset.cardName}'s ability cost was paid. Choose targets, then resolve it.`, "success");
+}
+
+function openActivatedAbilityMenu(source) {
+  const abilities = activatedAbilitiesFor(source);
+  if (!abilities.length || activeTrigger || activeAbilitySource || resolvingSpell) return;
+  activeAbilitySource = source;
+  triggerSourceImage.src = source.querySelector("img")?.src || "";
+  triggerSourceImage.alt = source.dataset.cardName;
+  triggerViewerTitle.textContent = source.dataset.cardName;
+  triggerViewerKind.textContent = "Activated abilities";
+  triggerCondition.textContent = "Choose an ability. Its cost will be paid immediately.";
+  triggerEffect.textContent = "";
+  triggerTargetOptions.replaceChildren();
+  abilities.forEach((ability) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${ability.cost}: ${ability.effect}`;
+    button.addEventListener("click", () => beginActivatedAbility(source, ability));
+    triggerTargetOptions.append(button);
+  });
+  resolveTriggerButton.dataset.mode = "ability-menu";
+  resolveTriggerButton.textContent = "Cancel";
+  resolveTriggerButton.disabled = false;
+  triggerViewer.hidden = false;
+  triggerViewerBackdrop.hidden = false;
+  triggerTargetOptions.querySelector("button")?.focus();
+}
+
+function showNextTriggeredAbility() {
+  if (activeTrigger || activeAbilitySource || !triggerQueue.length) return;
+  activeTrigger = triggerQueue.shift();
+  triggerSourceImage.src = activeTrigger.source.querySelector("img")?.src || "";
+  triggerSourceImage.alt = activeTrigger.source.dataset.cardName;
+  triggerViewerTitle.textContent = activeTrigger.source.dataset.cardName;
+  triggerViewerKind.textContent = "Triggered ability";
+  triggerCondition.textContent = `${activeTrigger.word} ${activeTrigger.condition}…`;
+  triggerEffect.textContent = activeTrigger.effect;
+  renderAbilityTargets();
   triggerViewer.hidden = false;
   triggerViewerBackdrop.hidden = false;
   resolveTriggerButton.focus();
 }
 
 function resolveTriggeredAbility() {
+  if (resolveTriggerButton.dataset.mode === "ability-menu") {
+    closeActivatedAbilityMenu();
+    return;
+  }
+  if (resolveTriggerButton.dataset.mode === "ability-cost-targets") {
+    if (!pendingAbilityPayment || pendingAbilityPayment.selected.length !== pendingAbilityPayment.requirement.count) return;
+    beginActivatedAbility(pendingAbilityPayment.source, pendingAbilityPayment.ability, [...pendingAbilityPayment.selected]);
+    return;
+  }
   if (!activeTrigger) return;
   const { source, effect } = activeTrigger;
   let { targets } = activeTrigger;
@@ -1269,15 +1483,22 @@ function resolveTriggeredAbility() {
       refreshCardState(topCard);
     }
   }
+  const addManaMatch = effect.match(/\badd\s+\{([WUBRGC])\}/i);
+  if (addManaMatch) {
+    manaPool[addManaMatch[1].toUpperCase()] += 1;
+    renderManaPool();
+  }
+  const abilityKind = activeTrigger.type === "activated" ? "activated ability" : "triggered ability";
   showMessage(
     counterResults.length || stateResults.length
       ? `${source.dataset.cardName}'s ability resolved: ${[...counterResults, ...stateResults].join("; ")}.`
-      : `${source.dataset.cardName}'s triggered ability resolved.`,
+      : `${source.dataset.cardName}'s ${abilityKind} resolved.`,
     "success",
   );
   activeTrigger = null;
   triggerViewer.hidden = true;
   triggerViewerBackdrop.hidden = true;
+  resolveTriggerButton.dataset.mode = "resolve";
   showNextTriggeredAbility();
 }
 
@@ -1478,6 +1699,10 @@ function refreshCardState(element) {
   const isLand = element.dataset.typeLine.includes("Land");
   const manaTypes = JSON.parse(element.dataset.producedMana || "[]");
   updateStunCounterBadge(element);
+  element.classList.toggle(
+    "has-activated-ability",
+    !editingMode && onPlayerBattlefield && activatedAbilitiesFor(element).length > 0,
+  );
 
   const awaitingPlacement = element.classList.contains("awaiting-placement");
   if (inGraveyard) {
@@ -1503,6 +1728,7 @@ function refreshCardState(element) {
   element.querySelector(".cast-card")?.remove();
   element.querySelector(".mana-actions")?.remove();
   element.querySelector(".flashback-badge")?.remove();
+  element.classList.remove("single-mana-land");
 
   if (inPlayerGraveyard && flashbackCost) {
     const badge = document.createElement("span");
@@ -1512,9 +1738,17 @@ function refreshCardState(element) {
   }
 
   if (!editingMode && onPlayerBattlefield && isLand && manaTypes.length) {
+    const payableManaTypes = manaTypes.filter((type) => MANA_TYPES.includes(type));
+    if (payableManaTypes.length === 1) {
+      element.classList.add("single-mana-land");
+      element.title = element.classList.contains("tapped")
+        ? `${element.dataset.cardName} is tapped`
+        : `Click ${element.dataset.cardName} to tap for {${payableManaTypes[0]}}`;
+      return;
+    }
     const actions = document.createElement("div");
     actions.className = "mana-actions";
-    manaTypes.filter((type) => MANA_TYPES.includes(type)).forEach((type) => {
+    payableManaTypes.forEach((type) => {
       const choice = document.createElement("button");
       choice.className = `mana-choice mana-${type.toLowerCase()}`;
       choice.type = "button";
@@ -1588,6 +1822,24 @@ function createBoardCard(card) {
     if (hoveredBoardCard === element) hoveredBoardCard = null;
   });
   element.addEventListener("click", (event) => {
+    const zone = element.parentElement?.dataset.zone;
+    const manaTypes = JSON.parse(element.dataset.producedMana || "[]").filter((type) => MANA_TYPES.includes(type));
+    if (!editingMode && zone === "player-battlefield" && element.dataset.typeLine.includes("Land") && manaTypes.length === 1 && !event.target.closest("button")) {
+      event.preventDefault();
+      addMana(manaTypes[0], element);
+      refreshCardState(element);
+      return;
+    }
+    const canChooseActivatedAbility = !editingMode
+      && zone === "player-battlefield"
+      && activatedAbilitiesFor(element).length > 0
+      && !(window.currentTurnPhase === "Combat phase" && element.classList.contains("combat-eligible"));
+    if (canChooseActivatedAbility && !event.target.closest("button")) {
+      event.preventDefault();
+      event.stopPropagation();
+      openActivatedAbilityMenu(element);
+      return;
+    }
     if (!element.classList.contains("awaiting-placement") || event.target.closest("button")) return;
     selectedPermanent = element;
     element.classList.add("selected-for-resolution");
@@ -1884,7 +2136,9 @@ updateGraveyardDisplays();
 const staticAbilityObserver = new MutationObserver(() => recalculateStaticAbilities());
 document.querySelectorAll('[data-zone$="battlefield"]').forEach((battlefield) => {
   staticAbilityObserver.observe(battlefield, { childList: true });
+  new MutationObserver(arrangeMountainStacks).observe(battlefield, { childList: true });
 });
+arrangeMountainStacks();
 recalculateStaticAbilities();
 
 renderManaPool();

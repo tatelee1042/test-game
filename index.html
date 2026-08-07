@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=36" />
+    <link rel="stylesheet" href="styles.css?v=45" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -32,7 +32,6 @@
 
         <div class="hand-zone drop-zone" data-zone="opponent-hand" aria-label="Opponent hand" tabindex="0">
           <span class="zone-label">Opponent hand</span>
-          <span class="card-count">7 cards</span>
         </div>
 
         <div class="play-area">
@@ -51,9 +50,9 @@
               <span class="zone-label">Library</span>
             </div>
           </aside>
-          <div class="battlefield-zone drop-zone" data-zone="opponent-battlefield" tabindex="0">
-            <span class="zone-label">Enemy battlefield</span>
-            <span class="zone-hint">Cards in play</span>
+          <div class="battlefield-shell">
+            <span class="battlefield-heading">Enemy battlefield</span>
+            <div class="battlefield-zone drop-zone" data-zone="opponent-battlefield" tabindex="0"></div>
           </div>
         </div>
 
@@ -74,9 +73,9 @@
 
       <section class="player-side player" aria-labelledby="player-name">
         <div class="play-area">
-          <div class="battlefield-zone drop-zone" data-zone="player-battlefield" tabindex="0">
-            <span class="zone-label">Your battlefield</span>
-            <span class="zone-hint">Cards in play</span>
+          <div class="battlefield-shell">
+            <span class="battlefield-heading">Your battlefield</span>
+            <div class="battlefield-zone drop-zone" data-zone="player-battlefield" tabindex="0"></div>
           </div>
           <aside class="card-piles" aria-label="Your card piles">
             <div class="zone card-zone library drop-zone" data-zone="player-library" tabindex="0">
@@ -97,7 +96,6 @@
 
         <div class="hand-zone drop-zone" data-zone="player-hand" aria-label="Your hand" tabindex="0">
           <span class="zone-label">Your hand</span>
-          <span class="card-count">7 cards</span>
         </div>
 
         <header class="player-bar">
@@ -187,7 +185,7 @@
     <aside class="trigger-viewer" role="dialog" aria-modal="true" aria-labelledby="trigger-viewer-title" hidden>
       <img class="trigger-source-image" alt="" />
       <div>
-        <p class="eyebrow">Triggered ability</p>
+        <p class="eyebrow trigger-viewer-kind">Triggered ability</p>
         <h2 id="trigger-viewer-title">Ability triggered</h2>
         <p class="trigger-condition"></p>
         <div class="trigger-effect"></div>
@@ -219,7 +217,7 @@
       </div>
     </aside>
 
-    <script src="app.js?v=36" defer></script>
+    <script src="app.js?v=45" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
