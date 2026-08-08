@@ -93,6 +93,7 @@ let abilityTargetingController = null;
 let pendingAbilityPayment = null;
 let pendingKickerCast = null;
 let pendingSurgeCast = null;
+let pendingEffectChoice = null;
 let alliedSpellCastTurn = 0;
 const manaPool = Object.fromEntries(MANA_TYPES.map((type) => [type, 0]));
 
@@ -130,6 +131,7 @@ function recordAlliedSpellCast() {
 }
 
 function resolvedOracleText(cardElement) {
+  if (cardElement.dataset.resolutionEffectOverride) return cardElement.dataset.resolutionEffectOverride;
   return (cardElement.dataset.oracleText || "").split("\n").flatMap((line) => {
     if (/^(?:Kicker|Surge)\b/i.test(line.trim())) return [];
     const surgeConditional = line.match(/^If (?:this spell(?:'s)?|.+?'s) surge cost was paid,\s*(.+)$/i);
@@ -138,6 +140,47 @@ function resolvedOracleText(cardElement) {
     if (kickerConditional) return cardElement.dataset.kicked === "true" ? [kickerConditional[1]] : [];
     return [line];
   }).join("\n");
+}
+
+function effectChoicesFor(effect) {
+  const tapChoice = effect.match(/\b(tap) or (untap)\b/i);
+  if (tapChoice) return ["Tap", "Untap"].map((label) => ({ label, effect: effect.replace(tapChoice[0], label.toLowerCase()) }));
+  const statChoice = effect.match(/\bgets?\s+([+-]\d+\/[+-]\d+)\s+or\s+([+-]\d+\/[+-]\d+)\s+until end of turn\b/i);
+  if (statChoice) return [statChoice[1], statChoice[2]].map((value) => ({
+    label: `Get ${value}`,
+    effect: effect.replace(statChoice[0], `gets ${value} until end of turn`),
+  }));
+  const keywords = "first strike|double strike|deathtouch|defender|flying|haste|hexproof|indestructible|lifelink|menace|reach|trample|vigilance";
+  const keywordChoice = effect.match(new RegExp(`\\bgains?\\s+(${keywords})\\s+or\\s+(${keywords})\\s+until end of turn\\b`, "i"));
+  if (keywordChoice) return [keywordChoice[1], keywordChoice[2]].map((keyword) => ({
+    label: `Gain ${keyword}`,
+    effect: effect.replace(keywordChoice[0], `gains ${keyword} until end of turn`),
+  }));
+  return [];
+}
+
+function showEffectChoice(choices, applyChoice) {
+  pendingEffectChoice = { choices, applyChoice };
+  triggerViewer.hidden = true;
+  triggerViewerBackdrop.hidden = true;
+  spellStack.hidden = true;
+  spellStackBackdrop.hidden = true;
+  abilityCostBar.hidden = false;
+  abilityCostBar.querySelector("strong").textContent = "Choose one effect";
+  abilityCostBarCopy.textContent = `${choices[0].label} or ${choices[1].label}`;
+  payPermanentCostButton.hidden = false;
+  payPermanentCostButton.disabled = false;
+  payPermanentCostButton.textContent = choices[0].label;
+  cancelPermanentCostButton.textContent = choices[1].label;
+}
+
+function applyPendingEffectChoice(index) {
+  if (!pendingEffectChoice) return;
+  const { choices, applyChoice } = pendingEffectChoice;
+  pendingEffectChoice = null;
+  abilityCostBar.hidden = true;
+  cancelPermanentCostButton.textContent = "Cancel";
+  applyChoice(choices[index]);
 }
 
 function isPlayableCastSource(cardElement) {
@@ -333,13 +376,25 @@ function untapPermanent(card) {
 
 function applyPermanentStateEffects(effect, controller, targets = []) {
   const results = [];
-  const creatures = targets.filter((target) => target.classList?.contains("board-card") && target.dataset.typeLine?.includes("Creature"));
+  let creatures = targets.filter((target) => target.classList?.contains("board-card") && target.dataset.typeLine?.includes("Creature"));
+  if (/\bcreatures? you control\b/i.test(effect)) {
+    creatures = [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)]
+      .filter((card) => card.dataset.typeLine.includes("Creature"));
+  }
   const stunMatch = effect.match(/(?:put|puts?)\s+(a|an|one|two|three|four|five|\d+)\s+stun counters? on\s+(?:it|target creature)/i);
   if (stunMatch) {
     const amount = counterAmount(stunMatch[1]);
     creatures.forEach((card) => {
       addStunCounters(card, amount);
       results.push(`${targetLabel(card)} gained ${amount} stun counter${amount === 1 ? "" : "s"}`);
+    });
+  }
+
+  if (/\btap\s+(?:it|that creature|target creature)\b/i.test(effect)) {
+    creatures.forEach((card) => {
+      card.classList.add("tapped");
+      card.querySelectorAll(".mana-choice").forEach((button) => { button.disabled = true; });
+      results.push(`${targetLabel(card)} tapped`);
     });
   }
 
@@ -354,6 +409,35 @@ function applyPermanentStateEffects(effect, controller, targets = []) {
       ? `${targetLabel(card)} stayed tapped and lost a stun counter`
       : `${targetLabel(card)} untapped`);
   });
+
+  if (/\buntil end of turn\b/i.test(effect)) {
+    const statMatch = effect.match(/\bgets?\s+([+-]\d+)\/([+-]\d+)\b/i);
+    const supportedKeywords = [
+      "first strike", "double strike", "deathtouch", "defender", "flying", "haste", "hexproof",
+      "indestructible", "lifelink", "menace", "reach", "trample", "vigilance",
+    ];
+    const gainedKeywords = supportedKeywords.filter((keyword) => new RegExp(`\\b${keyword}\\b`, "i").test(effect.match(/\bgains?\s+(.+?)\s+until end of turn/i)?.[1] || ""));
+    [...new Set(creatures)].forEach((card) => {
+      if (statMatch) {
+        card.dataset.temporaryPowerModifier = String(Number(card.dataset.temporaryPowerModifier || 0) + Number(statMatch[1]));
+        card.dataset.temporaryToughnessModifier = String(Number(card.dataset.temporaryToughnessModifier || 0) + Number(statMatch[2]));
+      }
+      if (gainedKeywords.length) {
+        const temporaryKeywords = new Set(JSON.parse(card.dataset.temporaryKeywords || "[]"));
+        gainedKeywords.forEach((keyword) => temporaryKeywords.add(keyword));
+        card.dataset.temporaryKeywords = JSON.stringify([...temporaryKeywords]);
+      }
+      if (statMatch || gainedKeywords.length) {
+        card.classList.add("temporary-modified");
+        const description = [
+          statMatch ? `${statMatch[1]}/${statMatch[2]}` : "",
+          gainedKeywords.join(", "),
+        ].filter(Boolean).join(" and ");
+        results.push(`${targetLabel(card)} gained ${description} until end of turn`);
+      }
+    });
+    if (statMatch || gainedKeywords.length) recalculateStaticAbilities();
+  }
   return results;
 }
 
@@ -506,6 +590,11 @@ function restoreCreaturesAtEndOfTurn() {
     card.dataset.damageMarked = "0";
     card.dataset.currentPower = card.dataset.basePower;
     card.dataset.currentToughness = card.dataset.baseToughness;
+    delete card.dataset.temporaryPowerModifier;
+    delete card.dataset.temporaryToughnessModifier;
+    delete card.dataset.temporaryKeywords;
+    card.classList.remove("temporary-modified");
+    card.querySelector(".temporary-effect-badge")?.remove();
     card.querySelector(".damage-badge")?.remove();
     card.classList.add("stats-restored");
     window.setTimeout(() => card.classList.remove("stats-restored"), 520);
@@ -569,6 +658,22 @@ function recalculateStaticAbilities() {
   });
 
   battlefieldCards.forEach((card) => {
+    const temporaryPower = Number(card.dataset.temporaryPowerModifier || 0);
+    const temporaryToughness = Number(card.dataset.temporaryToughnessModifier || 0);
+    const temporaryKeywords = JSON.parse(card.dataset.temporaryKeywords || "[]");
+    if (temporaryPower || temporaryToughness) {
+      card.dataset.currentPower = String(Number(card.dataset.currentPower || 0) + temporaryPower);
+      card.dataset.currentToughness = String(Number(card.dataset.currentToughness || 0) + temporaryToughness);
+    }
+    if (temporaryKeywords.length) {
+      const granted = new Set(JSON.parse(card.dataset.grantedKeywords || "[]"));
+      temporaryKeywords.forEach((keyword) => granted.add(keyword));
+      card.dataset.grantedKeywords = JSON.stringify([...granted]);
+    }
+    card.classList.toggle("temporary-modified", Boolean(temporaryPower || temporaryToughness || temporaryKeywords.length));
+  });
+
+  battlefieldCards.forEach((card) => {
     const enteredThisTurn = Number(card.dataset.enteredTurn || 0) >= Number(window.currentTurnNumber || 1);
     const shouldBeSummoningSick = card.dataset.typeLine.includes("Creature") && enteredThisTurn && !cardHasKeyword(card, "haste");
     card.classList.toggle("summoning-sick", shouldBeSummoningSick);
@@ -586,6 +691,20 @@ function recalculateStaticAbilities() {
       badge.className = "static-stats-badge";
       badge.textContent = `${card.dataset.currentPower}/${card.dataset.currentToughness}`;
       badge.title = "Current power and toughness after static abilities";
+      card.append(badge);
+    }
+    card.querySelector(".temporary-effect-badge")?.remove();
+    if (card.classList.contains("temporary-modified")) {
+      const temporaryPower = Number(card.dataset.temporaryPowerModifier || 0);
+      const temporaryToughness = Number(card.dataset.temporaryToughnessModifier || 0);
+      const temporaryKeywords = JSON.parse(card.dataset.temporaryKeywords || "[]");
+      const badge = document.createElement("span");
+      badge.className = "temporary-effect-badge";
+      badge.textContent = [
+        temporaryPower || temporaryToughness ? `${temporaryPower >= 0 ? "+" : ""}${temporaryPower}/${temporaryToughness >= 0 ? "+" : ""}${temporaryToughness}` : "",
+        temporaryKeywords.join(", "),
+      ].filter(Boolean).join(" · ");
+      badge.title = "Temporary effect until end of turn";
       card.append(badge);
     }
     if (card.dataset.typeLine.includes("Creature") && Number(card.dataset.currentToughness) <= 0 && !card.classList.contains("static-lethal-pending")) {
@@ -1188,7 +1307,7 @@ function payActivatedAbilityCost(source, printedCost, selectedPermanents = []) {
   if (permanentRequirement) {
     selectedPermanents.forEach((card) => {
       if (permanentRequirement.action === "tap") card.classList.add("tapped");
-      if (permanentRequirement.action === "sacrifice") document.querySelector(`[data-zone="${controller}-graveyard"]`).append(card);
+      if (permanentRequirement.action === "sacrifice") movePermanentToGraveyard(card, { reason: "sacrificed" });
       if (permanentRequirement.action === "return") document.querySelector(`[data-zone="${controller}-hand"]`).append(card);
       if (permanentRequirement.action === "exile") document.querySelector(`[data-zone="${controller}-exile"]`).append(card);
       refreshCardState(card);
@@ -1301,21 +1420,31 @@ function updateCreatureDamageBadge(card) {
   card.append(badge);
 }
 
-function sendLethalCreatureToGraveyard(card) {
+function movePermanentToGraveyard(card, { reason = "died", announce = false } = {}) {
+  if (card.classList.contains("moving-to-graveyard")) return;
   const battlefieldZone = card.parentElement?.dataset.zone || "";
   const owner = battlefieldZone.startsWith("opponent-") ? "opponent" : "player";
-  card.classList.add("creature-dying");
-  emitGameEvent("dies", { card, controller: owner });
-  card.setAttribute("aria-label", `${card.dataset.cardName} has lethal damage and is dying.`);
+  const died = battlefieldZone.endsWith("-battlefield") && card.dataset.typeLine.includes("Creature");
+  card.classList.add("moving-to-graveyard");
+  if (died) {
+    card.classList.add("creature-dying");
+    emitGameEvent("dies", { card, controller: owner, reason });
+    card.setAttribute("aria-label", `${card.dataset.cardName} ${reason === "sacrificed" ? "was sacrificed and is dying" : "has died"}.`);
+  }
+  const delay = died ? 720 : 0;
   window.setTimeout(() => {
     document.querySelector(`[data-zone="${owner}-graveyard"]`).append(card);
-    card.classList.remove("creature-dying");
+    card.classList.remove("creature-dying", "moving-to-graveyard");
     card.classList.remove("static-lethal-pending");
     card.dataset.damageMarked = "0";
     updateCreatureDamageBadge(card);
     refreshCardState(card);
-    showMessage(`${card.dataset.cardName} died and was put into ${owner === "player" ? "your" : "the opponent's"} graveyard.`, "error");
-  }, 720);
+    if (announce) showMessage(`${card.dataset.cardName} died and was put into ${owner === "player" ? "your" : "the opponent's"} graveyard.`, "error");
+  }, delay);
+}
+
+function sendLethalCreatureToGraveyard(card) {
+  movePermanentToGraveyard(card, { reason: "lethal damage", announce: true });
 }
 
 function applyResolvedDamage(card, targets) {
@@ -1404,16 +1533,24 @@ function triggerMatchesEvent(trigger, eventName, context) {
   const typeMatches = !eventCard
     || !/(creature|land|artifact|enchantment|planeswalker)/.test(condition)
     || ["creature", "land", "artifact", "enchantment", "planeswalker"].some((type) => condition.includes(type) && eventCard.dataset.typeLine.toLowerCase().includes(type));
-  const controlMatches = !condition.includes("under your control") || sourceController === eventController;
+  const controlledByYou = /(?:under your control|you control)/.test(condition);
+  const controlledByOpponent = /(?:under an? opponent's control|an? opponent controls|your opponents control|you (?:do not|don't) control)/.test(condition);
+  const controlMatches = (!controlledByYou || sourceController === eventController)
+    && (!controlledByOpponent || sourceController !== eventController);
   const namesSource = condition.includes(source.dataset.cardName.toLowerCase());
-  const subjectMatches = (!/\b(this|it)\b/.test(condition) && !namesSource) || sameCard;
+  const refersToSource = /\b(this|it)\b/.test(condition) || namesSource;
+  const excludesSource = /\b(?:another|other)\b/.test(condition);
+  const tokenMatches = !eventCard
+    || (!/\bnontoken\b/.test(condition) || eventCard.dataset.isToken !== "true")
+    && (!/\btoken creature\b/.test(condition) || eventCard.dataset.isToken === "true");
+  const subjectMatches = (refersToSource ? sameCard : true) && (!excludesSource || !sameCard);
 
   if (trigger.requiresKicked && source.dataset.kicked !== "true") return false;
 
   if (eventName === "permanent-enter") return condition.includes("enters") && typeMatches && controlMatches && subjectMatches;
   if (eventName === "spell-cast") return condition.includes("cast") && typeMatches && controlMatches;
   if (eventName === "attacks") return condition.includes("attack") && typeMatches && controlMatches && subjectMatches;
-  if (eventName === "dies") return condition.includes("dies") && typeMatches && controlMatches && subjectMatches;
+  if (eventName === "dies") return /\b(?:dies|die)\b/.test(condition) && typeMatches && tokenMatches && controlMatches && subjectMatches;
   if (eventName === "damage") return condition.includes("deals damage") && subjectMatches;
   if (eventName === "phase") {
     const phase = String(context.phase || "").toLowerCase();
@@ -1498,6 +1635,7 @@ function closeActivatedAbilityMenu() {
   pendingAbilityPayment = null;
   activeTrigger = null;
   triggerViewer.hidden = true;
+  triggerViewer.classList.remove("death-trigger-viewer");
   triggerViewerBackdrop.hidden = true;
   abilityCostBar.hidden = true;
   payPermanentCostButton.hidden = false;
@@ -1622,13 +1760,62 @@ function openActivatedAbilityMenu(source) {
   overlay.querySelector("button")?.focus();
 }
 
+function openSurgeCastMenu(source) {
+  const surgeCost = surgeCostFor(source);
+  if (!surgeCost || !surgeIsAvailable() || activeTrigger || activeAbilitySource || resolvingSpell) return;
+  hideCardHoverPreview();
+  activeAbilitySource = source;
+  source.dataset.inspectionZone = source.parentElement.dataset.zone;
+  document.body.append(source);
+  source.classList.add("ability-inspecting");
+  const lines = (source.dataset.oracleText || "").split("\n").filter((line) => line.trim());
+  const surgeLineIndex = Math.max(0, lines.findIndex((line) => /^Surge\b/i.test(line.trim())));
+  const overlay = document.createElement("div");
+  overlay.className = "activated-ability-overlay";
+  const surgeButton = document.createElement("button");
+  surgeButton.type = "button";
+  surgeButton.className = "ability-text-highlight";
+  surgeButton.setAttribute("aria-label", `Cast with surge for ${surgeCost}`);
+  surgeButton.title = `Cast with surge for ${surgeCost}`;
+  surgeButton.style.setProperty("--ability-line-top", `${58 + (surgeLineIndex / Math.max(1, lines.length)) * 27}%`);
+  surgeButton.style.setProperty("--ability-line-height", `${Math.max(7, 27 / Math.max(1, lines.length))}%`);
+  surgeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    source.classList.remove("ability-inspecting");
+    overlay.remove();
+    document.querySelector(`[data-zone="${source.dataset.inspectionZone}"]`)?.append(source);
+    delete source.dataset.inspectionZone;
+    activeAbilitySource = null;
+    triggerViewerBackdrop.hidden = true;
+    refreshCardState(source);
+    offerSurgeChoice(source, document.querySelector('[data-zone="player-battlefield"]'), surgeCost, false, false);
+  });
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "close-ability-inspection";
+  closeButton.textContent = "×";
+  closeButton.setAttribute("aria-label", "Cancel surge casting");
+  closeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeActivatedAbilityMenu();
+  });
+  overlay.append(surgeButton, closeButton);
+  source.append(overlay);
+  triggerViewer.hidden = true;
+  triggerViewerBackdrop.hidden = false;
+  surgeButton.focus();
+}
+
 function showNextTriggeredAbility() {
   if (activeTrigger || activeAbilitySource || !triggerQueue.length) return;
   activeTrigger = triggerQueue.shift();
   triggerSourceImage.src = activeTrigger.source.querySelector("img")?.src || "";
   triggerSourceImage.alt = activeTrigger.source.dataset.cardName;
   triggerViewerTitle.textContent = activeTrigger.source.dataset.cardName;
-  triggerViewerKind.textContent = "Triggered ability";
+  const isDeathTrigger = activeTrigger.eventName === "dies";
+  triggerViewer.classList.toggle("death-trigger-viewer", isDeathTrigger);
+  triggerViewerKind.textContent = isDeathTrigger ? "Death trigger" : "Triggered ability";
   triggerCondition.textContent = `${activeTrigger.word} ${activeTrigger.condition}…`;
   triggerEffect.textContent = activeTrigger.effect;
   renderAbilityTargets();
@@ -1653,6 +1840,17 @@ function resolveTriggeredAbility() {
     return;
   }
   if (!activeTrigger) return;
+  if (!activeTrigger.choiceMade) {
+    const choices = effectChoicesFor(activeTrigger.effect);
+    if (choices.length) {
+      showEffectChoice(choices, (choice) => {
+        activeTrigger.effect = choice.effect;
+        activeTrigger.choiceMade = true;
+        resolveTriggeredAbility();
+      });
+      return;
+    }
+  }
   const { source, effect } = activeTrigger;
   let { targets } = activeTrigger;
   const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
@@ -1709,6 +1907,7 @@ function resolveTriggeredAbility() {
   document.querySelectorAll(".legal-ability-target, .chosen-ability-target").forEach((target) => target.classList.remove("legal-ability-target", "chosen-ability-target"));
   abilityCostBar.hidden = true;
   triggerViewer.hidden = true;
+  triggerViewer.classList.remove("death-trigger-viewer");
   triggerViewerBackdrop.hidden = true;
   resolveTriggerButton.dataset.mode = "resolve";
   showNextTriggeredAbility();
@@ -1810,6 +2009,16 @@ function resolveActiveSpell() {
   if (!resolvingSpell) return;
   const card = resolvingSpell;
   const effectText = resolvedOracleText(card);
+  if (!card.dataset.resolutionEffectOverride) {
+    const choices = effectChoicesFor(effectText);
+    if (choices.length) {
+      showEffectChoice(choices, (choice) => {
+        card.dataset.resolutionEffectOverride = choice.effect;
+        resolveActiveSpell();
+      });
+      return;
+    }
+  }
   const resolvedTargets = chosenTargets.map(targetLabel);
   const targetElements = [...chosenTargets];
   const counterResults = applyPlayerCounterEffects(effectText, "player", targetElements);
@@ -1826,6 +2035,7 @@ function resolveActiveSpell() {
   delete card.dataset.lastPaidCost;
   delete card.dataset.printedCastCost;
   delete card.dataset.surgePaid;
+  delete card.dataset.resolutionEffectOverride;
   document.querySelector(`[data-zone="${destination}"]`).append(card);
   card.hidden = false;
   card.classList.add("spell-resolved");
@@ -1913,15 +2123,15 @@ function offerKickerChoice(cardElement, target, kickerCost) {
   cancelPermanentCostButton.textContent = "Cast normally";
 }
 
-function offerSurgeChoice(cardElement, target, surgeCost, castingWithFlashback = false) {
-  pendingSurgeCast = { cardElement, target, surgeCost, castingWithFlashback };
+function offerSurgeChoice(cardElement, target, surgeCost, castingWithFlashback = false, allowNormal = true) {
+  pendingSurgeCast = { cardElement, target, surgeCost, castingWithFlashback, allowNormal };
   abilityCostBar.hidden = false;
   abilityCostBar.querySelector("strong").textContent = `Use surge for ${cardElement.dataset.cardName}?`;
   abilityCostBarCopy.textContent = `You or a teammate cast a spell this turn. Pay ${surgeCost} instead of ${cardElement.dataset.manaCost}.`;
   payPermanentCostButton.hidden = false;
   payPermanentCostButton.disabled = false;
   payPermanentCostButton.textContent = `Pay surge ${surgeCost}`;
-  cancelPermanentCostButton.textContent = "Pay normal cost";
+  cancelPermanentCostButton.textContent = allowNormal ? "Pay normal cost" : "Cancel";
 }
 
 function prepareCastDropTargets(cardElement) {
@@ -1991,7 +2201,14 @@ function refreshCardState(element) {
       "blocking-animation",
     );
     element.querySelector(".summoning-sick-badge")?.remove();
+    element.querySelector(".temporary-effect-badge")?.remove();
     delete element.dataset.enteredTurn;
+    delete element.dataset.temporaryPowerModifier;
+    delete element.dataset.temporaryToughnessModifier;
+    delete element.dataset.temporaryKeywords;
+    element.dataset.currentPower = element.dataset.basePower;
+    element.dataset.currentToughness = element.dataset.baseToughness;
+    element.classList.remove("temporary-modified");
   }
   const flashbackCost = inPlayerGraveyard ? flashbackCostFor(element) : "";
   const canCastWithFlashback = !editingMode && Boolean(flashbackCost);
@@ -2121,6 +2338,17 @@ function createBoardCard(card) {
       abilityCostBarCopy.textContent = `Selected ${selected.length} of ${requirement.count}`;
       payPermanentCostButton.disabled = selected.length !== requirement.count;
       payPermanentCostButton.textContent = `Pay cost (${selected.length}/${requirement.count})`;
+      return;
+    }
+    const canChooseSurge = !editingMode
+      && zone === "player-hand"
+      && surgeIsAvailable()
+      && !pendingSurgeCast
+      && Boolean(surgeCostFor(element));
+    if (canChooseSurge && !event.target.closest("button")) {
+      event.preventDefault();
+      event.stopPropagation();
+      openSurgeCastMenu(element);
       return;
     }
     const manaTypes = JSON.parse(element.dataset.producedMana || "[]").filter((type) => MANA_TYPES.includes(type));
@@ -2297,6 +2525,7 @@ importer.toastCancel.addEventListener("click", cancelPlacement);
 clearManaButton.addEventListener("click", clearManaPool);
 document.addEventListener("turn:untap", () => {
   alliedSpellCastTurn = 0;
+  restoreCreaturesAtEndOfTurn();
   untapAllPermanents();
 });
 document.addEventListener("team:spellcast", recordAlliedSpellCast);
@@ -2305,12 +2534,15 @@ document.addEventListener("turn:phasechange", (event) => {
   if (event.detail.phase === "Combat phase") beginCombatDeclaration();
   else {
     cleanupCombat();
-    if (event.detail.phase === "End step") restoreCreaturesAtEndOfTurn();
   }
 });
 resolveSpellButton.addEventListener("click", resolveActiveSpell);
 resolveTriggerButton.addEventListener("click", resolveTriggeredAbility);
 payPermanentCostButton.addEventListener("click", () => {
+  if (pendingEffectChoice) {
+    applyPendingEffectChoice(0);
+    return;
+  }
   if (pendingSurgeCast) {
     const { cardElement, target, surgeCost, castingWithFlashback } = pendingSurgeCast;
     finishCardCast(cardElement, target, castingWithFlashback, surgeCost, false, true);
@@ -2329,8 +2561,18 @@ payPermanentCostButton.addEventListener("click", () => {
   beginActivatedAbility(pendingAbilityPayment.source, pendingAbilityPayment.ability, [...pendingAbilityPayment.selected]);
 });
 cancelPermanentCostButton.addEventListener("click", () => {
+  if (pendingEffectChoice) {
+    applyPendingEffectChoice(1);
+    return;
+  }
   if (pendingSurgeCast) {
-    const { cardElement, target, castingWithFlashback } = pendingSurgeCast;
+    const { cardElement, target, castingWithFlashback, allowNormal } = pendingSurgeCast;
+    if (!allowNormal) {
+      pendingSurgeCast = null;
+      abilityCostBar.hidden = true;
+      cancelPermanentCostButton.textContent = "Cancel";
+      return;
+    }
     finishCardCast(cardElement, target, castingWithFlashback);
     return;
   }

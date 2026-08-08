@@ -1102,6 +1102,24 @@ h2 {
 }
 .trigger-source-image { width: 100%; align-self: center; border-radius: 9px; }
 .trigger-viewer h2 { margin: 4px 0 8px; color: #b8f0d7; }
+.trigger-viewer.death-trigger-viewer {
+  border-color: rgba(225, 91, 91, 0.78);
+  background: linear-gradient(145deg, #291417, #0b0809);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.78), 0 0 34px rgba(181, 48, 55, 0.42);
+  animation: death-trigger-enter 360ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.trigger-viewer.death-trigger-viewer h2,
+.trigger-viewer.death-trigger-viewer .trigger-viewer-kind { color: #ffb3ad; }
+.trigger-viewer.death-trigger-viewer .trigger-effect {
+  border-color: rgba(225, 91, 91, 0.4);
+  background: rgba(90, 19, 25, 0.2);
+}
+
+@keyframes death-trigger-enter {
+  0% { opacity: 0; transform: translate(-50%, -44%) scale(0.88); filter: grayscale(1); }
+  55% { opacity: 1; transform: translate(-50%, -52%) scale(1.025); filter: grayscale(0); }
+  100% { transform: translate(-50%, -50%) scale(1); }
+}
 .trigger-condition { margin: 0 0 10px; color: var(--muted); font-size: 0.7rem; }
 .trigger-effect {
   padding: 12px;
@@ -1450,6 +1468,36 @@ h2 {
   font-size: 0.46rem;
   font-weight: 800;
   pointer-events: none;
+}
+
+.temporary-effect-badge {
+  position: absolute;
+  z-index: 10;
+  right: 4px;
+  bottom: 30px;
+  max-width: calc(100% - 8px);
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(184, 151, 255, 0.82);
+  border-radius: 999px;
+  color: #f4ecff;
+  background: rgba(62, 35, 105, 0.94);
+  box-shadow: 0 0 12px rgba(155, 106, 255, 0.48);
+  font-size: 0.44rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: temporary-effect-arrive 420ms ease-out;
+}
+
+.board-card.temporary-modified {
+  box-shadow: 0 0 0 2px rgba(174, 132, 255, 0.52), 0 0 20px rgba(139, 87, 236, 0.38);
+}
+
+@keyframes temporary-effect-arrive {
+  from { opacity: 0; transform: translateY(7px) scale(0.82); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .flashback-badge {
