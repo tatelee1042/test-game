@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=45" />
+    <link rel="stylesheet" href="styles.css?v=55" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -172,6 +172,12 @@
       <button type="button">Cancel</button>
     </div>
     <div class="game-message" role="status" hidden></div>
+    <div class="ability-cost-bar" role="status" hidden>
+      <strong>Choose a permanent</strong>
+      <span></span>
+      <button class="pay-permanent-cost" type="button" disabled>Pay cost</button>
+      <button class="cancel-permanent-cost" type="button">Cancel</button>
+    </div>
     <div class="card-hover-preview" aria-hidden="true" hidden><img alt="" /></div>
     <div class="graveyard-viewer-backdrop" hidden></div>
     <aside class="graveyard-viewer" role="dialog" aria-modal="true" aria-labelledby="graveyard-viewer-title" hidden>
@@ -217,7 +223,7 @@
       </div>
     </aside>
 
-    <script src="app.js?v=45" defer></script>
+    <script src="app.js?v=55" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
