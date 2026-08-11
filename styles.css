@@ -263,6 +263,68 @@ h2 {
 }
 
 .mana-symbol,
+/* ── Mana pips ────────────────────────────────────────────────────────────
+   Real symbol art for {W}{U}{B}{R}{G}{C}; everything else the game can print
+   inside braces (generic numbers, {X}, {T}, hybrids) falls back to a matching
+   round token so a cost still reads as one continuous run of pips. */
+.mana-pip {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  border-radius: 50%;
+  margin-inline: 0.06em;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  vertical-align: -0.16em;
+  font-style: normal;
+}
+
+.mana-pip-w { background-image: url("assets/mana-w.png"); }
+.mana-pip-u { background-image: url("assets/mana-u.png"); }
+.mana-pip-b { background-image: url("assets/mana-b.png"); }
+.mana-pip-r { background-image: url("assets/mana-r.png"); }
+.mana-pip-g { background-image: url("assets/mana-g.png"); }
+.mana-pip-c { background-image: url("assets/mana-c.png"); }
+
+.mana-pip.is-text {
+  display: inline-grid;
+  place-items: center;
+  color: #1c1a17;
+  background: #cdc5ba;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  font-size: 0.78em;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* Hybrid and Phyrexian costs carry two characters, so they need more room. */
+.mana-pip.is-text.is-tight {
+  width: auto;
+  min-width: 1.05em;
+  padding-inline: 0.24em;
+  border-radius: 999px;
+  font-size: 0.66em;
+}
+
+.mana-pool .mana-pip { width: 1.25em; height: 1.25em; }
+
+.mana-pool-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #e8e0cd;
+  font-weight: 800;
+}
+
+/* When a land's tap button holds real art, the art is the button. */
+.mana-choice.is-pip {
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+}
+.mana-choice.is-pip .mana-pip { width: 20px; height: 20px; margin: 0; }
+
 .mana-choice {
   display: inline-grid;
   place-items: center;
@@ -948,18 +1010,42 @@ h2 {
 .hand-zone .board-card {
   height: clamp(108px, 15.5vh, 142px);
   max-height: none;
-  clip-path: inset(0 0 calc(100% - var(--hand-card-visible-height)) 0 round 5px);
+  clip-path: inset(0 0 calc(100% - var(--hand-card-visible-height, 63px)) 0 round 5px);
   transform: translateY(0);
   transform-origin: top center;
-  transition: transform 260ms cubic-bezier(0.2, 0.82, 0.25, 1), clip-path 220ms ease, filter 180ms ease;
+  /* transform and clip-path MUST share a duration and easing — see the lift
+     rule below, which relies on the two cancelling each other out. */
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.82, 0.25, 1),
+    clip-path 240ms cubic-bezier(0.2, 0.82, 0.25, 1),
+    filter 180ms ease;
 }
 
+/*
+ * Lifting a hand card must never move it out from under the pointer, or the
+ * card un-hovers, drops, re-hovers and flickers. clip-path also clips hit
+ * testing, so the hoverable strip is the top --hand-card-visible-height of the
+ * card. Lifting by exactly (strip height - full height) puts the card's bottom
+ * edge right at the bottom of that strip: wherever in the strip the pointer
+ * entered, it is still over the card afterwards.
+ *
+ * Both offsets equal (height - strip), so as long as transform and clip-path
+ * animate with the same duration and easing they cancel at every frame, not
+ * just at the ends — the bottom edge never moves during the animation either.
+ */
 .hand-zone .board-card:not(.dragging):not(.pointer-dragging):hover,
 .hand-zone .board-card:not(.dragging):not(.pointer-dragging):focus-visible {
   z-index: 45;
   clip-path: inset(0 round 5px);
-  transform: translateY(calc(-50% - 5px));
+  transform: translateY(calc(var(--hand-card-visible-height, 63px) - 100%));
   filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 12px rgba(211, 170, 88, 0.32));
+}
+
+/* Settle time: sweeping the pointer across the hand shouldn't fan every card
+   open, and a graze on the way elsewhere shouldn't register at all. Leaving is
+   instant (the base rule's delay is 0), and keyboard focus is never delayed. */
+.hand-zone .board-card:not(.dragging):not(.pointer-dragging):hover:not(:focus-visible) {
+  transition-delay: 90ms;
 }
 
 .hand-zone .board-card.dragging,
@@ -1157,15 +1243,20 @@ h2 {
   cursor: default;
 }
 
-.battlefield-zone > .board-card.mountain-land {
+/* Lands stack in a column down the right edge, overlapping by half a card so
+   the top half of each stays visible. JS sets --land-right and the per-card
+   --land-stack-offset, and pads the battlefield so creatures stay clear. */
+.battlefield-zone > .board-card.side-land {
   position: absolute;
-  z-index: calc(20 + var(--mountain-stack-index, 0));
-  right: calc(8px + var(--mountain-stack-offset, 0px));
-  bottom: 8px;
+  z-index: calc(20 + var(--land-stack-index, 0));
+  right: var(--land-right, 8px);
+  top: calc(8px + var(--land-stack-offset, 0px));
   margin: 0;
+  transition: top 180ms ease-out;
 }
 
-.board-card.single-mana-land:not(.tapped) {
+.board-card.single-mana-land:not(.tapped),
+.board-card.multi-mana-land:not(.tapped) {
   cursor: pointer;
 }
 
@@ -1534,6 +1625,44 @@ h2 {
 }
 .board-card.static-modified { filter: drop-shadow(0 0 10px rgba(116, 218, 193, 0.44)); }
 
+/* Sits directly above .keyword-badge in the bottom-left stack. */
+.plus-counter-badge {
+  position: absolute;
+  z-index: 10;
+  bottom: 30px;
+  left: 4px;
+  padding: 4px 6px;
+  border: 1px solid rgba(150, 226, 168, 0.8);
+  border-radius: 999px;
+  color: #e6ffee;
+  background: rgba(19, 71, 44, 0.94);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+  font-size: 0.5rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.keyword-badge {
+  position: absolute;
+  z-index: 9;
+  bottom: 4px;
+  left: 4px;
+  max-width: calc(100% - 8px);
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(198, 212, 255, 0.6);
+  border-radius: 999px;
+  color: #e9efff;
+  background: rgba(26, 38, 74, 0.94);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+  font-size: 0.44rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .board-card.summoning-sick:not(.combat-eligible) {
   filter: saturate(0.72) brightness(0.86) drop-shadow(0 5px 6px rgba(0, 0, 0, 0.5));
 }
@@ -1672,7 +1801,7 @@ h2 {
 }
 
 .board-card.tapped {
-  transform: rotate(90deg) scale(0.78);
+  transform: rotate(90deg);
 }
 
 .legal-cast-drop {
@@ -1684,6 +1813,79 @@ h2 {
 .legal-cast-drop.cast-drag-over {
   outline-color: #f2d28a !important;
   box-shadow: 0 0 0 8px rgba(242, 210, 138, 0.2), 0 0 35px rgba(242, 210, 138, 0.34) !important;
+}
+
+.mana-choice-prompt {
+  position: fixed;
+  z-index: 48;
+  bottom: 96px;
+  left: 50%;
+  display: flex;
+  width: min(430px, calc(100vw - 24px));
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  border: 1px solid rgba(211, 170, 88, 0.7);
+  border-radius: 9px;
+  background: rgba(18, 15, 11, 0.97);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.58);
+  gap: 8px;
+  transform: translateX(-50%);
+}
+
+/* Required: the display above would otherwise beat the UA's [hidden] rule. */
+.mana-choice-prompt[hidden] { display: none; }
+
+.mana-choice-prompt strong {
+  color: #f2e3c0;
+  font-size: 0.72rem;
+}
+
+.mana-choice-source {
+  flex: 1 1 100%;
+  color: #b9ad95;
+  font-size: 0.64rem;
+}
+
+.mana-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.mana-choice-options button {
+  min-width: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 5px;
+  color: #121212;
+  font-size: 0.7rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mana-choice-options button:hover,
+.mana-choice-options button:focus-visible {
+  border-color: #f2d28a;
+  box-shadow: 0 0 0 2px rgba(242, 210, 138, 0.35);
+}
+
+.cancel-mana-choice {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid rgba(211, 170, 88, 0.45);
+  border-radius: 5px;
+  color: #d9cdb4;
+  background: transparent;
+  font-size: 0.64rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* The land whose mana is being chosen. */
+.board-card.choosing-mana {
+  outline: 2px solid rgba(242, 210, 138, 0.9);
+  outline-offset: 3px;
 }
 
 .combat-prompt {

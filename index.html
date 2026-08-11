@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=60" />
+    <link rel="stylesheet" href="styles.css?v=71" />
   </head>
   <body>
     <main class="game-board" aria-label="Magic puzzle board">
@@ -131,7 +131,7 @@
       <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
       <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
     </div>
-    <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus a creature and press T to tap</div>
+    <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus any battlefield card and press T to tap</div>
     <div class="drawer-backdrop" hidden></div>
     <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">
       <header class="drawer-header">
@@ -199,6 +199,13 @@
         <button class="resolve-trigger" type="button">Resolve ability</button>
       </div>
     </aside>
+    <div class="mana-choice-prompt" role="status" hidden>
+      <strong>Choose a mana type</strong>
+      <span class="mana-choice-source"></span>
+      <div class="mana-choice-options" aria-label="Mana types this land can produce"></div>
+      <button class="cancel-mana-choice" type="button">Cancel</button>
+    </div>
+
     <div class="combat-prompt" role="status" hidden>
       <strong>Choose who this creature attacks</strong>
       <span class="combat-attacker-name"></span>
@@ -223,7 +230,7 @@
       </div>
     </aside>
 
-    <script src="app.js?v=60" defer></script>
+    <script src="app.js?v=71" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];

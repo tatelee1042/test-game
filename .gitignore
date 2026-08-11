@@ -1,2 +1,17 @@
 .vercel
 .env*
+
+# macOS
+.DS_Store
+
+# Installed skill packages (92MB incl. virtualenvs) — skills-lock.json records
+# what to reinstall with `npx skills add`.
+.agents/
+
+# Downloaded reference data, refetched by download-rules / download-mtgjson
+comprehensive-rules-*.txt
+comprehensive-rules-*.pkl
+
+# Local tool caches
+.impeccable/
+.claude/

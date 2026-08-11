@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skills": {
+    "cube-wizard": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "cube-wizard/SKILL.md",
+      "computedHash": "f4d5ad7e1a4b6818c55afd63d605070b11f3c3667ec2d70a2a96bf13cae945c8"
+    },
+    "deck-forge": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "deck-forge/SKILL.md",
+      "computedHash": "908fd6fd980196d7973b5cf7d4ce38151e65f2caf04a59a6d4c89b3480eaf78b"
+    },
+    "deck-strat": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "deck-strat/SKILL.md",
+      "computedHash": "8ce34337c2e5af888af1b58c5e02fdbcf70ab6764749de7a968d3426a0134f65"
+    },
+    "deck-wizard": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "deck-wizard/SKILL.md",
+      "computedHash": "5fd2b1c42a828f3b124561caa29edf773605eed88015258f486fd240bcf2dd19"
+    },
+    "lgs-search": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "lgs-search/SKILL.md",
+      "computedHash": "3ac800f05e4514bc40c32eba658a147214b758c5623fe46036d36a02115193e3"
+    },
+    "proxy-printer": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "proxy-printer/SKILL.md",
+      "computedHash": "38b972e74105be95c04270cceac8a42bdd4c79940b4e15f6180b20e131eb7854"
+    },
+    "rules-lawyer": {
+      "source": "dan-blanchard/mtg-skills",
+      "sourceType": "github",
+      "skillPath": "rules-lawyer/SKILL.md",
+      "computedHash": "ea10540637f3f3e5756f9f9bf0feb783106033fc0ebcffeac24af51cf2bb5b4f"
+    }
+  }
+}

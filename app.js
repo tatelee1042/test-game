@@ -42,6 +42,10 @@ const nextPhaseButton = document.querySelector(".next-phase");
 const combatPrompt = document.querySelector(".combat-prompt");
 const combatAttackerName = document.querySelector(".combat-attacker-name");
 const combatTargetOptions = document.querySelector(".combat-target-options");
+const manaChoicePrompt = document.querySelector(".mana-choice-prompt");
+const manaChoiceSource = document.querySelector(".mana-choice-source");
+const manaChoiceOptions = document.querySelector(".mana-choice-options");
+const cancelManaChoiceButton = document.querySelector(".cancel-mana-choice");
 const cardHoverPreview = document.querySelector(".card-hover-preview");
 const cardHoverPreviewImage = cardHoverPreview.querySelector("img");
 const saveManagerTrigger = document.querySelector(".save-manager-trigger");
@@ -56,6 +60,7 @@ const graveyardViewerTitle = document.querySelector("#graveyard-viewer-title");
 const graveyardViewerCards = document.querySelector(".graveyard-viewer-cards");
 const closeGraveyardViewerButton = document.querySelector(".close-graveyard-viewer");
 const graveyardZones = [...document.querySelectorAll('[data-zone$="graveyard"]')];
+const exileZones = [...document.querySelectorAll('[data-zone$="exile"]')];
 const triggerViewer = document.querySelector(".trigger-viewer");
 const triggerViewerBackdrop = document.querySelector(".trigger-viewer-backdrop");
 const triggerViewerKind = document.querySelector(".trigger-viewer-kind");
@@ -92,10 +97,47 @@ let activeAbilitySource = null;
 let abilityTargetingController = null;
 let pendingAbilityPayment = null;
 let pendingKickerCast = null;
+let pendingGraveyardCast = null;
+let pendingManaChoice = null;
 let pendingSurgeCast = null;
 let pendingEffectChoice = null;
 let alliedSpellCastTurn = 0;
 const manaPool = Object.fromEntries(MANA_TYPES.map((type) => [type, 0]));
+
+const MANA_PIP_ART = new Set(["W", "U", "B", "R", "G", "C"]);
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (character) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]
+  ));
+}
+
+/** Markup for one `{...}` symbol: real art where we have it, a round token otherwise. */
+function manaPipHtml(symbol) {
+  const key = symbol.toUpperCase();
+  const label = escapeHtml(`{${symbol}}`);
+  if (MANA_PIP_ART.has(key)) {
+    return `<i class="mana-pip mana-pip-${key.toLowerCase()}" role="img" aria-label="${label}" title="${label}"></i>`;
+  }
+  const text = escapeHtml(key);
+  return `<i class="mana-pip is-text${text.length > 1 ? " is-tight" : ""}" role="img" aria-label="${label}" title="${label}">${text}</i>`;
+}
+
+/** Escapes `text`, then swaps every `{...}` for its symbol. Returns HTML. */
+function withManaSymbols(text) {
+  return escapeHtml(text).replace(/\{([^}]{1,6})\}/g, (_match, symbol) => manaPipHtml(symbol));
+}
+
+/** textContent when there is nothing to swap, symbol markup when there is. */
+function setManaText(element, text) {
+  if (!element) return;
+  const value = String(text ?? "");
+  if (!value.includes("{")) {
+    element.textContent = value;
+    return;
+  }
+  element.innerHTML = withManaSymbols(value);
+}
 
 function cardImage(card) {
   return card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal ?? "";
@@ -150,7 +192,7 @@ function effectChoicesFor(effect) {
     label: `Get ${value}`,
     effect: effect.replace(statChoice[0], `gets ${value} until end of turn`),
   }));
-  const keywords = "first strike|double strike|deathtouch|defender|flying|haste|hexproof|indestructible|lifelink|menace|reach|trample|vigilance";
+  const keywords = keywordsWithTrait("grantable").join("|");
   const keywordChoice = effect.match(new RegExp(`\\bgains?\\s+(${keywords})\\s+or\\s+(${keywords})\\s+until end of turn\\b`, "i"));
   if (keywordChoice) return [keywordChoice[1], keywordChoice[2]].map((keyword) => ({
     label: `Gain ${keyword}`,
@@ -167,7 +209,7 @@ function showEffectChoice(choices, applyChoice) {
   spellStackBackdrop.hidden = true;
   abilityCostBar.hidden = false;
   abilityCostBar.querySelector("strong").textContent = "Choose one effect";
-  abilityCostBarCopy.textContent = `${choices[0].label} or ${choices[1].label}`;
+  setManaText(abilityCostBarCopy, `${choices[0].label} or ${choices[1].label}`);
   payPermanentCostButton.hidden = false;
   payPermanentCostButton.disabled = false;
   payPermanentCostButton.textContent = choices[0].label;
@@ -185,29 +227,725 @@ function applyPendingEffectChoice(index) {
 
 function isPlayableCastSource(cardElement) {
   const zone = cardElement.parentElement?.dataset.zone;
-  return zone === "player-hand" || (zone === "player-graveyard" && Boolean(flashbackCostFor(cardElement)));
+  return zone === "player-hand" || (zone === "player-graveyard" && graveyardCastOptionsFor(cardElement).length > 0);
+}
+
+/**
+ * Every keyword the board understands, in one place.
+ *
+ * `zones` lists where the keyword actually does something — a Deathtouch
+ * creature in the graveyard is inert, a Flashback card only matters there.
+ * The remaining fields are the hooks the rules engine reads: combat helpers
+ * look up `damageSteps` / `lethalOnAnyDamage` / `tramplesOver`, the blocking
+ * code reads `blockableBy` / `blockersRequired`, targeting reads
+ * `untargetableBy`, and `grantable` marks the keywords that "gains ~ until
+ * end of turn" effects and static anthems are allowed to hand out.
+ */
+const KEYWORD_LIBRARY = {
+  // ── Battlefield · evasion, blocking, attacking ──────────────────────────
+  flying: {
+    zones: ["battlefield"],
+    short: "Fly",
+    grantable: true,
+    summary: "Can be blocked only by creatures with flying or reach.",
+    blockableBy: (blocker) => cardHasKeyword(blocker, "flying") || cardHasKeyword(blocker, "reach"),
+  },
+  reach: {
+    zones: ["battlefield"],
+    short: "Rch",
+    grantable: true,
+    summary: "Can block creatures with flying.",
+  },
+  menace: {
+    zones: ["battlefield"],
+    short: "Men",
+    grantable: true,
+    summary: "Can't be blocked except by two or more creatures.",
+    blockersRequired: 2,
+  },
+  defender: {
+    zones: ["battlefield"],
+    short: "Def",
+    grantable: true,
+    summary: "Can't attack.",
+    cannotAttack: true,
+  },
+  haste: {
+    zones: ["battlefield"],
+    short: "Has",
+    grantable: true,
+    summary: "Can attack the turn it comes under your control.",
+    ignoresSummoningSickness: true,
+  },
+  vigilance: {
+    zones: ["battlefield"],
+    short: "Vig",
+    grantable: true,
+    summary: "Attacking doesn't cause this creature to tap.",
+    attacksWithoutTapping: true,
+  },
+
+  // ── Battlefield · combat damage ─────────────────────────────────────────
+  "first strike": {
+    zones: ["battlefield"],
+    short: "1st",
+    grantable: true,
+    summary: "Deals combat damage before creatures without first strike.",
+    damageSteps: ["first"],
+  },
+  "double strike": {
+    zones: ["battlefield"],
+    short: "2x",
+    grantable: true,
+    summary: "Deals combat damage in both the first-strike step and the regular step.",
+    damageSteps: ["first", "regular"],
+  },
+  deathtouch: {
+    zones: ["battlefield"],
+    short: "DT",
+    grantable: true,
+    summary: "Any nonzero amount of damage it deals to a creature is lethal.",
+    lethalOnAnyDamage: true,
+  },
+  trample: {
+    zones: ["battlefield"],
+    short: "Tra",
+    grantable: true,
+    summary: "Combat damage beyond what's lethal is assigned to the defending player.",
+    tramplesOver: true,
+  },
+  lifelink: {
+    zones: ["battlefield"],
+    short: "LL",
+    grantable: true,
+    summary: "Damage it deals also causes its controller to gain that much life.",
+    lifelink: true,
+  },
+  indestructible: {
+    zones: ["battlefield"],
+    short: "Ind",
+    grantable: true,
+    summary: "Lethal damage and “destroy” effects don't destroy it.",
+    indestructible: true,
+  },
+  prowess: {
+    zones: ["battlefield"],
+    short: "Pro",
+    summary: "Whenever you cast a noncreature spell, this creature gets +1/+1 until end of turn.",
+    prowess: true,
+  },
+
+  // ── Battlefield · protection from targeting ─────────────────────────────
+  hexproof: {
+    zones: ["battlefield"],
+    short: "Hex",
+    grantable: true,
+    summary: "Can't be the target of spells or abilities your opponents control.",
+    untargetableBy: (chooser, cardController) => chooser !== cardController,
+  },
+  shroud: {
+    zones: ["battlefield"],
+    short: "Shr",
+    summary: "Can't be the target of any spells or abilities.",
+    untargetableBy: () => true,
+  },
+  ward: {
+    zones: ["battlefield"],
+    short: "Ward",
+    summary: "Spells your opponents control that target this are countered unless its ward cost is paid.",
+    wardTax: true,
+  },
+
+  // ── Hand · casting permissions and alternate costs ──────────────────────
+  flash: {
+    zones: ["hand"],
+    short: "Flash",
+    summary: "You may cast this any time you could cast an instant.",
+    castsAtInstantSpeed: true,
+  },
+  kicker: {
+    zones: ["hand"],
+    short: "Kick",
+    summary: "You may pay an additional cost as you cast this spell.",
+  },
+  surge: {
+    zones: ["hand"],
+    short: "Surge",
+    summary: "Cast for its surge cost if you or a teammate has cast another spell this turn.",
+  },
+
+  // ── Graveyard ───────────────────────────────────────────────────────────
+  // ── Graveyard · permission to CAST the card from the graveyard (CR 702:
+  //    static abilities, distinct from the activated abilities below) ──────
+  flashback: {
+    zones: ["graveyard"],
+    short: "FB",
+    summary: "Cast this from your graveyard for its flashback cost, then exile it. (CR 702.34a)",
+    castsFromGraveyard: true,
+    graveyardCast: { costMode: "alternative", exilesOnResolve: true, instantOrSorceryOnly: true },
+  },
+  retrace: {
+    zones: ["graveyard"],
+    short: "Retrace",
+    summary: "Cast this from your graveyard by discarding a land card as an additional cost. (CR 702.81a)",
+    castsFromGraveyard: true,
+    graveyardCast: {
+      costMode: "additional",
+      exilesOnResolve: false,
+      requirement: { kind: "discard", zone: "player-hand", count: 1, label: "Discard a land card", match: (card) => card.dataset.typeLine.includes("Land") },
+    },
+  },
+  "jump-start": {
+    zones: ["graveyard"],
+    short: "Jump",
+    summary: "Cast this from your graveyard by discarding a card as an additional cost, then exile it. (CR 702.133a)",
+    castsFromGraveyard: true,
+    graveyardCast: {
+      costMode: "additional",
+      exilesOnResolve: true,
+      instantOrSorceryOnly: true,
+      requirement: { kind: "discard", zone: "player-hand", count: 1, label: "Discard a card", match: () => true },
+    },
+  },
+  escape: {
+    zones: ["graveyard"],
+    short: "Escape",
+    summary: "Cast this from your graveyard by paying its escape cost, which exiles other cards from your graveyard. (CR 702.138a)",
+    castsFromGraveyard: true,
+    graveyardCast: { costMode: "alternative", exilesOnResolve: false, escapes: true },
+  },
+  harmonize: {
+    zones: ["graveyard"],
+    short: "Harm",
+    summary: "Cast this from your graveyard for its harmonize cost, tapping up to one untapped creature you control to reduce the cost by its power, then exile it. (CR 702.180a)",
+    castsFromGraveyard: true,
+    graveyardCast: {
+      costMode: "alternative",
+      exilesOnResolve: true,
+      requirement: { kind: "tap", zone: "player-battlefield", count: 1, optional: true, label: "Tap up to one untapped creature to reduce the cost", match: (card) => card.dataset.typeLine.includes("Creature") && !card.classList.contains("tapped") },
+    },
+  },
+  mayhem: {
+    zones: ["graveyard"],
+    short: "Mayhem",
+    summary: "If you discarded this card this turn, cast it from your graveyard for its mayhem cost. (CR 702.187b)",
+    castsFromGraveyard: true,
+    graveyardCast: {
+      costMode: "alternative",
+      exilesOnResolve: false,
+      requiresDiscardedThisTurn: true,
+    },
+  },
+  disturb: {
+    zones: ["graveyard"],
+    short: "Disturb",
+    summary: "Cast this transformed from your graveyard by paying its disturb cost. (CR 702.146a)",
+    castsFromGraveyard: true,
+    graveyardCast: { costMode: "alternative", exilesOnResolve: false, transforms: true },
+  },
+  aftermath: {
+    zones: ["graveyard"],
+    short: "After",
+    summary: "Cast the second half of this split card from your graveyard, then exile it. (CR 702.127a)",
+    castsFromGraveyard: true,
+    graveyardCast: { costMode: "secondFace", exilesOnResolve: true, instantOrSorceryOnly: true },
+  },
+
+  // ── Graveyard · activated abilities (CR 702: these are the only keywords that
+  //    are activated abilities functioning while the card is in a graveyard) ──
+  unearth: {
+    zones: ["graveyard"],
+    short: "Unearth",
+    summary: "[Cost]: Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning of the next end step. Activate only as a sorcery. (CR 702.84a)",
+    graveyardAbility: {
+      describe: () => "Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning of the next end step.",
+      resolve: resolveUnearth,
+    },
+  },
+  scavenge: {
+    zones: ["graveyard"],
+    short: "Scavenge",
+    summary: "[Cost], Exile this card from your graveyard: Put a number of +1/+1 counters equal to this card's power on target creature. Activate only as a sorcery. (CR 702.97a)",
+    graveyardAbility: {
+      exilesAsCost: true,
+      // Routed through the normal targeting flow, so the effect text drives it.
+      describe: (card) => `Put ${Number(card.dataset.basePower || 0)} +1/+1 counters on target creature.`,
+    },
+  },
+  embalm: {
+    zones: ["graveyard"],
+    short: "Embalm",
+    summary: "[Cost], Exile this card from your graveyard: Create a token that's a copy of this card, except it's white, has no mana cost, and is a Zombie. Activate only as a sorcery. (CR 702.128a)",
+    graveyardAbility: {
+      exilesAsCost: true,
+      describe: () => "Create a token that's a copy of this card, except it's a white Zombie with no mana cost.",
+      resolve: (card) => resolveTokenCopyKeyword(card, { flavor: "white Zombie" }),
+    },
+  },
+  eternalize: {
+    zones: ["graveyard"],
+    short: "Eternalize",
+    summary: "[Cost], Exile this card from your graveyard: Create a token that's a copy of this card, except it's a black 4/4 Zombie with no mana cost. Activate only as a sorcery. (CR 702.129a)",
+    graveyardAbility: {
+      exilesAsCost: true,
+      describe: () => "Create a token that's a copy of this card, except it's a black 4/4 Zombie with no mana cost.",
+      resolve: (card) => resolveTokenCopyKeyword(card, { flavor: "black 4/4 Zombie", power: "4", toughness: "4" }),
+    },
+  },
+  encore: {
+    zones: ["graveyard"],
+    short: "Encore",
+    summary: "[Cost], Exile this card from your graveyard: For each opponent, create a token copy that attacks that opponent this turn if able. The tokens gain haste. Sacrifice them at the beginning of the next end step. Activate only as a sorcery. (CR 702.141a)",
+    graveyardAbility: {
+      exilesAsCost: true,
+      describe: () => "For each opponent, create a token copy that attacks that opponent this turn. The tokens gain haste and are sacrificed at the beginning of the next end step.",
+      resolve: (card) => resolveTokenCopyKeyword(card, { flavor: "attacking copy", attacking: true, haste: true, sacrificeAtEndStep: true, zombie: false }),
+    },
+  },
+};
+
+function keywordDefinition(keyword) {
+  return KEYWORD_LIBRARY[String(keyword).toLowerCase()] ?? null;
+}
+
+/** Keyword names carrying a given hook, longest first so regex alternations match greedily. */
+function keywordsWithTrait(trait) {
+  return Object.keys(KEYWORD_LIBRARY)
+    .filter((keyword) => KEYWORD_LIBRARY[keyword][trait])
+    .sort((left, right) => right.length - left.length);
+}
+
+/** Which of the three zones a card is sitting in, or "" when it's mid-cast or off-board. */
+function zoneKindFor(cardElement) {
+  const zone = cardElement.parentElement?.dataset.zone || "";
+  if (zone.endsWith("-battlefield")) return "battlefield";
+  if (zone.endsWith("-hand")) return "hand";
+  if (zone.endsWith("-graveyard")) return "graveyard";
+  return "";
+}
+
+function controllerOf(cardElement) {
+  return cardElement.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+}
+
+/** Printed keywords plus anything granted by static anthems or until-end-of-turn effects. */
+function cardKeywordNames(cardElement) {
+  return [...new Set([
+    ...JSON.parse(cardElement.dataset.keywords || "[]"),
+    ...JSON.parse(cardElement.dataset.grantedKeywords || "[]"),
+    ...JSON.parse(cardElement.dataset.temporaryKeywords || "[]"),
+  ].map((keyword) => keyword.toLowerCase()))];
 }
 
 function cardHasKeyword(cardElement, requestedKeyword) {
-  const keywords = [
-    ...JSON.parse(cardElement.dataset.keywords || "[]"),
-    ...JSON.parse(cardElement.dataset.grantedKeywords || "[]"),
-  ];
-  return keywords.some((keyword) => keyword.toLowerCase() === requestedKeyword.toLowerCase());
+  return cardKeywordNames(cardElement).includes(String(requestedKeyword).toLowerCase());
+}
+
+/** The card's keywords that this library knows about AND that work in its current zone. */
+function activeKeywordsFor(cardElement) {
+  const zoneKind = zoneKindFor(cardElement);
+  return cardKeywordNames(cardElement).filter((keyword) => {
+    const definition = keywordDefinition(keyword);
+    // With no zone (a spell mid-resolution) fall back to the printed keyword.
+    return definition && (!zoneKind || definition.zones.includes(zoneKind));
+  });
+}
+
+/** True when any zone-appropriate keyword on the card carries `trait`. */
+function cardKeywordTrait(cardElement, trait) {
+  return activeKeywordsFor(cardElement).some((keyword) => keywordDefinition(keyword)?.[trait]);
 }
 
 function cardHasHaste(cardElement) {
   return cardHasKeyword(cardElement, "haste");
 }
 
+/** Combat damage is dealt in a first-strike step, a regular step, or both. */
+function damageStepsFor(cardElement) {
+  const steps = new Set();
+  activeKeywordsFor(cardElement).forEach((keyword) => {
+    keywordDefinition(keyword)?.damageSteps?.forEach((step) => steps.add(step));
+  });
+  return steps.size ? [...steps] : ["regular"];
+}
+
+/** Every evasion keyword on the attacker must accept this blocker. */
 function canBlockAttacker(blocker, attacker) {
-  if (!cardHasKeyword(attacker, "flying")) return true;
-  return cardHasKeyword(blocker, "flying") || cardHasKeyword(blocker, "reach");
+  return activeKeywordsFor(attacker).every((keyword) => {
+    const restriction = keywordDefinition(keyword)?.blockableBy;
+    return !restriction || restriction(blocker, attacker);
+  });
+}
+
+/** Menace and friends raise the number of blockers needed to block at all. */
+function blockersRequiredFor(attacker) {
+  return activeKeywordsFor(attacker).reduce(
+    (most, keyword) => Math.max(most, keywordDefinition(keyword)?.blockersRequired || 1),
+    1,
+  );
+}
+
+function canBeTargetedBy(candidate, chooser = "player") {
+  if (!candidate?.classList?.contains("board-card")) return true;
+  const cardController = controllerOf(candidate);
+  return !activeKeywordsFor(candidate).some((keyword) => {
+    const rule = keywordDefinition(keyword)?.untargetableBy;
+    return rule && rule(chooser, cardController);
+  });
+}
+
+function wardCostFor(cardElement) {
+  return cardElement.dataset.oracleText?.match(/\bWard\s*[—-]?\s*((?:\{[^}]+\})+)/i)?.[1] || "";
+}
+
+/**
+ * Ward taxes an opponent's spell that targets the permanent. Returns the first
+ * target whose ward cost the player can't pay — that spell is countered.
+ */
+function unpaidWardTarget(targets) {
+  for (const target of targets) {
+    if (!target?.classList?.contains("board-card")) continue;
+    if (controllerOf(target) !== "opponent" || !cardKeywordTrait(target, "wardTax")) continue;
+    const cost = wardCostFor(target);
+    if (!cost) continue;
+    const payment = spendManaFor(cost);
+    if (!payment.paid) return { target, cost };
+  }
+  return null;
+}
+
+/** Reads the mana cost printed after a keyword, e.g. "Unearth {2}{B}" → "{2}{B}". */
+function keywordCostFor(cardElement, keyword) {
+  const pattern = new RegExp(`(?:^|\\n)\\s*${keyword}\\s*(?:—|-)?\\s*((?:\\{[^}]+\\})+)`, "i");
+  return cardElement.dataset.oracleText?.match(pattern)?.[1] || "";
+}
+
+/**
+ * Synthesizes the activatable abilities a card offers from your graveyard.
+ * Per CR 702, only unearth, scavenge, embalm, eternalize and encore are
+ * activated abilities that function there.
+ */
+function graveyardKeywordAbilities(card) {
+  if (zoneKindFor(card) !== "graveyard" || controllerOf(card) !== "player") return [];
+  const lines = (card.dataset.oracleText || "").split("\n");
+  return activeKeywordsFor(card).flatMap((keyword) => {
+    const ability = keywordDefinition(keyword)?.graveyardAbility;
+    if (!ability) return [];
+    const cost = keywordCostFor(card, keyword);
+    if (!cost) return [];
+    const lineIndex = lines.findIndex((line) => new RegExp(`^\\s*${keyword}\\b`, "i").test(line));
+    return [{
+      cost,
+      effect: ability.describe(card),
+      keyword,
+      lineIndex: lineIndex < 0 ? 0 : lineIndex,
+      lineCount: lines.length,
+    }];
+  });
+}
+
+function secondFaceOf(card) {
+  try {
+    return JSON.parse(card.dataset.secondFace || "null");
+  } catch {
+    return null;
+  }
+}
+
+/** Escape costs read "Escape—{2}{B}{B}, Exile four other cards from your graveyard." */
+function escapeExileCountFor(card) {
+  const match = card.dataset.oracleText?.match(/Escape[^\n]*?Exile\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+other\s+cards?/i);
+  return match ? counterAmount(match[1]) : 0;
+}
+
+/**
+ * Every way this card may currently be cast from your graveyard. Each option
+ * carries the mana to pay, any additional cost to satisfy first, and what
+ * happens to the card after it resolves.
+ */
+function graveyardCastOptionsFor(card) {
+  if (zoneKindFor(card) !== "graveyard" || controllerOf(card) !== "player") return [];
+  return activeKeywordsFor(card).flatMap((keyword) => {
+    const definition = keywordDefinition(keyword);
+    const spec = definition?.graveyardCast;
+    if (!spec) return [];
+    if (spec.instantOrSorceryOnly && !/Instant|Sorcery/.test(card.dataset.typeLine)) return [];
+    // Mayhem only works on the turn you discarded the card.
+    if (spec.requiresDiscardedThisTurn
+      && Number(card.dataset.discardedTurn || 0) !== Number(window.currentTurnNumber || 1)) return [];
+    const secondFace = secondFaceOf(card);
+    if ((spec.transforms || spec.costMode === "secondFace") && !secondFace) return [];
+    const cost = spec.costMode === "additional"
+      ? card.dataset.manaCost
+      : spec.costMode === "secondFace"
+        ? secondFace.manaCost
+        : keywordCostFor(card, keyword);
+    if (!cost) return [];
+    let requirement = spec.requirement || null;
+    if (spec.escapes) {
+      const count = escapeExileCountFor(card);
+      requirement = count
+        ? { kind: "exile", zone: "player-graveyard", count, label: `Exile ${count} other card${count === 1 ? "" : "s"} from your graveyard`, match: (candidate) => candidate !== card }
+        : null;
+    }
+    return [{ keyword, cost, costMode: spec.costMode, requirement, spec, secondFace }];
+  });
+}
+
+function graveyardCastLabel(option) {
+  const name = option.keyword.replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return option.costMode === "additional" ? `${name} ${option.cost}` : `${name} ${option.cost}`;
+}
+
+function clearGraveyardCastPrompt() {
+  document.querySelectorAll(".legal-ability-cost, .chosen-ability-cost")
+    .forEach((card) => card.classList.remove("legal-ability-cost", "chosen-ability-cost"));
+  abilityCostBar.hidden = true;
+  payPermanentCostButton.hidden = false;
+  cancelPermanentCostButton.textContent = "Cancel";
+  pendingGraveyardCast = null;
+}
+
+/** Lets the player pick the cards to discard/exile/tap for a graveyard cast. */
+function showGraveyardCastCostChoices(card, target, option) {
+  const { requirement } = option;
+  const candidates = [...document.querySelectorAll(`[data-zone="${requirement.zone}"] .board-card`)]
+    .filter((candidate) => candidate !== card && requirement.match(candidate));
+  if (candidates.length < requirement.count && !requirement.optional) {
+    showMessage(`You can't pay ${card.dataset.cardName}'s ${option.keyword} cost — ${requirement.label.toLowerCase()}.`, "error");
+    return;
+  }
+  pendingGraveyardCast = { card, target, option, requirement, selected: [], candidates };
+  candidates.forEach((candidate) => candidate.classList.add("legal-ability-cost"));
+  abilityCostBar.hidden = false;
+  abilityCostBar.querySelector("strong").textContent = requirement.label;
+  abilityCostBarCopy.textContent = requirement.optional
+    ? "Optional — choose one or cast without it."
+    : `Selected 0 of ${requirement.count}`;
+  payPermanentCostButton.hidden = false;
+  payPermanentCostButton.disabled = !requirement.optional;
+  payPermanentCostButton.textContent = requirement.optional ? "Cast without tapping" : `Pay cost (0/${requirement.count})`;
+}
+
+/** Applies the chosen additional cost. Called only after the mana was paid. */
+function payGraveyardAdditionalCost(option, selected) {
+  const kind = option.requirement?.kind;
+  if (kind === "discard") {
+    selected.forEach((chosen) => {
+      chosen.dataset.discardedTurn = String(window.currentTurnNumber || 1);
+      document.querySelector('[data-zone="player-graveyard"]').append(chosen);
+      refreshCardState(chosen);
+    });
+  }
+  if (kind === "exile") {
+    selected.forEach((chosen) => {
+      document.querySelector('[data-zone="player-exile"]').append(chosen);
+      refreshCardState(chosen);
+    });
+  }
+  if (kind === "tap") {
+    selected.forEach((chosen) => {
+      chosen.classList.add("tapped");
+      chosen.querySelectorAll(".mana-choice").forEach((button) => { button.disabled = true; });
+    });
+  }
+}
+
+function finishGraveyardCast(card, target, option, selected = []) {
+  clearGraveyardCastPrompt();
+  let cost = option.cost;
+  // Harmonize: tapping a creature reduces the cost by that creature's power.
+  if (option.requirement?.kind === "tap" && selected.length) {
+    const power = creatureCombatStats(selected[0]).power;
+    // reduceManaCost takes a cost string, so express the reduction as generic mana.
+    if (power > 0) cost = reduceManaCost(cost, `{${power}}`);
+  }
+  card.dataset.graveyardCastKeyword = option.keyword;
+  if (option.spec.exilesOnResolve) card.dataset.castExilesOnResolve = "true";
+  if (option.spec.transforms) card.dataset.pendingTransform = "true";
+  if (option.spec.escapes) card.dataset.escaped = "true";
+  const alternateCost = option.costMode === "additional" ? "" : cost;
+  finishCardCast(card, target, false, alternateCost, false, false, () => {
+    payGraveyardAdditionalCost(option, selected);
+    showMessage(`${card.dataset.cardName} cast from your graveyard with ${option.keyword}.`, "success");
+  });
+}
+
+function beginGraveyardCast(card, target, option) {
+  if (option.requirement) {
+    showGraveyardCastCostChoices(card, target, option);
+    return;
+  }
+  finishGraveyardCast(card, target, option);
+}
+
+/** More than one graveyard-cast keyword on the same card: let the player choose. */
+function offerGraveyardCastChoice(card, target, options) {
+  showEffectChoice(
+    options.slice(0, 2).map((option) => ({ label: graveyardCastLabel(option), option })),
+    (choice) => beginGraveyardCast(card, target, choice.option),
+  );
+}
+
+/** Disturb casts the card transformed — swap in its back face as it resolves. */
+function transformToSecondFace(card) {
+  const face = secondFaceOf(card);
+  if (!face) return;
+  delete card.dataset.pendingTransform;
+  card.dataset.secondFace = JSON.stringify({
+    name: card.dataset.cardName,
+    typeLine: card.dataset.typeLine,
+    oracleText: card.dataset.oracleText,
+    manaCost: card.dataset.manaCost,
+    power: card.dataset.basePower,
+    toughness: card.dataset.baseToughness,
+    image: card.querySelector("img")?.src || "",
+  });
+  card.dataset.cardName = face.name || card.dataset.cardName;
+  card.dataset.typeLine = face.typeLine || card.dataset.typeLine;
+  card.dataset.oracleText = face.oracleText || "";
+  card.dataset.basePower = face.power || "";
+  card.dataset.baseToughness = face.toughness || "";
+  card.dataset.transformed = "true";
+  const image = card.querySelector("img");
+  if (image && face.image) {
+    image.src = face.image;
+    image.alt = face.name || card.dataset.cardName;
+  }
+}
+
+/** Builds a token that copies the given card, reusing its art and rules text. */
+function tokenCopyOf(card, { power, toughness, zombie = true } = {}) {
+  const image = card.querySelector("img")?.src || "";
+  const printedType = card.dataset.typeLine || "";
+  // Embalm and eternalize add Zombie to the copy's creature types.
+  const typeLine = !zombie || /\bZombie\b/.test(printedType)
+    ? printedType
+    : `${printedType}${printedType.includes("—") ? "" : " —"} Zombie`;
+  const token = createBoardCard({
+    id: `${card.dataset.cardId || "copy"}-token`,
+    name: card.dataset.cardName,
+    mana_cost: "",
+    type_line: typeLine || card.dataset.typeLine,
+    oracle_text: card.dataset.oracleText || "",
+    keywords: JSON.parse(card.dataset.keywords || "[]"),
+    power: power ?? card.dataset.basePower,
+    toughness: toughness ?? card.dataset.baseToughness,
+    produced_mana: [],
+    image_uris: { normal: image, small: image },
+  });
+  token.dataset.isToken = "true";
+  return token;
+}
+
+/** Shared resolver for embalm, eternalize and encore — each makes a token copy. */
+function resolveTokenCopyKeyword(card, { flavor, power, toughness, attacking = false, haste = false, sacrificeAtEndStep = false, zombie = true }) {
+  const battlefield = document.querySelector('[data-zone="player-battlefield"]');
+  const token = tokenCopyOf(card, { power, toughness, zombie });
+  if (haste) token.dataset.temporaryKeywords = JSON.stringify(["haste"]);
+  else token.dataset.enteredTurn = String(window.currentTurnNumber || 1);
+  if (sacrificeAtEndStep) token.dataset.sacrificeAtEndStep = "true";
+  battlefield.append(token);
+  if (attacking) {
+    token.classList.add("declared-attacker");
+    token.dataset.attackTarget = "Enemy Planeswalker";
+    if (window.currentTurnPhase === "Combat phase") combatAssignments.set(token, document.querySelector(".opponent .life-total"));
+  }
+  token.classList.add("token-created");
+  window.setTimeout(() => token.classList.remove("token-created"), 650);
+  refreshCardState(token);
+  recalculateStaticAbilities();
+  emitGameEvent("permanent-enter", { card: token, controller: "player" });
+  showMessage(`${card.dataset.cardName} returned as a ${flavor} token copy.`, "success");
+}
+
+/** Unearth returns the card itself, hasty and short-lived. */
+function resolveUnearth(card) {
+  const battlefield = document.querySelector('[data-zone="player-battlefield"]');
+  battlefield.append(card);
+  const temporary = new Set(JSON.parse(card.dataset.temporaryKeywords || "[]"));
+  temporary.add("haste");
+  card.dataset.temporaryKeywords = JSON.stringify([...temporary]);
+  card.dataset.exileAtEndStep = "true";
+  card.dataset.damageMarked = "0";
+  card.classList.add("permanent-resolved");
+  window.setTimeout(() => card.classList.remove("permanent-resolved"), 650);
+  refreshCardState(card);
+  recalculateStaticAbilities();
+  emitGameEvent("permanent-enter", { card, controller: "player" });
+  showMessage(`${card.dataset.cardName} was unearthed with haste. It is exiled at the beginning of the next end step.`, "success");
+}
+
+/** Cleans up unearthed permanents and encore tokens at the beginning of the end step. */
+function resolveEndStepDelayedEffects() {
+  const exiling = [...document.querySelectorAll('[data-zone$="battlefield"] .board-card[data-exile-at-end-step="true"]')];
+  const sacrificing = [...document.querySelectorAll('[data-zone$="battlefield"] .board-card[data-sacrifice-at-end-step="true"]')];
+  exiling.forEach((card) => {
+    const owner = controllerOf(card);
+    delete card.dataset.exileAtEndStep;
+    document.querySelector(`[data-zone="${owner}-exile"]`).append(card);
+    refreshCardState(card);
+  });
+  sacrificing.forEach((card) => {
+    delete card.dataset.sacrificeAtEndStep;
+    movePermanentToGraveyard(card, { reason: "sacrificed" });
+  });
+  if (exiling.length || sacrificing.length) {
+    recalculateStaticAbilities();
+    showMessage(
+      `End step: ${[
+        exiling.length ? `${exiling.length} unearthed permanent${exiling.length === 1 ? " was" : "s were"} exiled` : "",
+        sacrificing.length ? `${sacrificing.length} encore token${sacrificing.length === 1 ? " was" : "s were"} sacrificed` : "",
+      ].filter(Boolean).join("; ")}.`,
+      "error",
+    );
+  }
+}
+
+/**
+ * Shows the keywords that are live for the card's current zone — combat keywords
+ * on the battlefield, casting keywords in hand, flashback in the graveyard.
+ */
+function updateKeywordBadge(card) {
+  card.querySelector(".keyword-badge")?.remove();
+  // Flashback already has its own cost badge in the graveyard.
+  const keywords = activeKeywordsFor(card).filter((keyword) => keyword !== "flashback");
+  if (!keywords.length) return;
+  const label = (keyword) => {
+    const definition = keywordDefinition(keyword);
+    const cost = definition.wardTax ? wardCostFor(card) : "";
+    return `${definition.short}${cost}`;
+  };
+  const badge = document.createElement("span");
+  badge.className = "keyword-badge";
+  setManaText(badge, keywords.map(label).join(" "));
+  badge.title = keywords
+    .map((keyword) => `${keyword.replace(/\b\w/g, (letter) => letter.toUpperCase())} — ${keywordDefinition(keyword).summary}`)
+    .join("\n");
+  card.append(badge);
+}
+
+/** Prowess: casting a noncreature spell pumps your prowess creatures until end of turn. */
+function applyProwessTriggers(spellElement) {
+  if (spellElement.dataset.typeLine.includes("Creature")) return;
+  const creatures = [...document.querySelectorAll('[data-zone="player-battlefield"] .board-card')]
+    .filter((card) => cardKeywordTrait(card, "prowess"));
+  if (!creatures.length) return;
+  creatures.forEach((card) => {
+    card.dataset.temporaryPowerModifier = String(Number(card.dataset.temporaryPowerModifier || 0) + 1);
+    card.dataset.temporaryToughnessModifier = String(Number(card.dataset.temporaryToughnessModifier || 0) + 1);
+    card.classList.add("temporary-modified");
+  });
+  recalculateStaticAbilities();
+  showMessage(
+    `Prowess: ${creatures.map((card) => card.dataset.cardName).join(", ")} got +1/+1 until end of turn.`,
+    "success",
+  );
 }
 
 function showMessage(message, tone = "neutral") {
   window.clearTimeout(messageTimer);
-  gameMessage.textContent = message;
+  setManaText(gameMessage, message);
   gameMessage.dataset.tone = tone;
   gameMessage.hidden = false;
   messageTimer = window.setTimeout(() => {
@@ -390,6 +1128,16 @@ function applyPermanentStateEffects(effect, controller, targets = []) {
     });
   }
 
+  const plusCounterMatch = effect.match(/put\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+\+1\/\+1\s+counters?\s+on/i);
+  if (plusCounterMatch) {
+    const amount = counterAmount(plusCounterMatch[1]);
+    creatures.forEach((card) => {
+      card.dataset.plusOneCounters = String(Number(card.dataset.plusOneCounters || 0) + amount);
+      results.push(`${targetLabel(card)} got ${amount} +1/+1 counter${amount === 1 ? "" : "s"}`);
+    });
+    if (creatures.length) recalculateStaticAbilities();
+  }
+
   if (/\btap\s+(?:it|that creature|target creature)\b/i.test(effect)) {
     creatures.forEach((card) => {
       card.classList.add("tapped");
@@ -412,10 +1160,7 @@ function applyPermanentStateEffects(effect, controller, targets = []) {
 
   if (/\buntil end of turn\b/i.test(effect)) {
     const statMatch = effect.match(/\bgets?\s+([+-]\d+)\/([+-]\d+)\b/i);
-    const supportedKeywords = [
-      "first strike", "double strike", "deathtouch", "defender", "flying", "haste", "hexproof",
-      "indestructible", "lifelink", "menace", "reach", "trample", "vigilance",
-    ];
+    const supportedKeywords = keywordsWithTrait("grantable");
     const gainedKeywords = supportedKeywords.filter((keyword) => new RegExp(`\\b${keyword}\\b`, "i").test(effect.match(/\bgains?\s+(.+?)\s+until end of turn/i)?.[1] || ""));
     [...new Set(creatures)].forEach((card) => {
       if (statMatch) {
@@ -456,6 +1201,15 @@ function updateGraveyardDisplays() {
     const viewButton = zone.querySelector(".view-graveyard");
     viewButton.hidden = cards.length <= 1;
     viewButton.textContent = `View ${cards.length} cards`;
+  });
+}
+
+/** Exile has no viewer button, just a running count of what's been exiled. */
+function updateExileDisplays() {
+  exileZones.forEach((zone) => {
+    const cards = [...zone.querySelectorAll(":scope > .board-card")];
+    cards.forEach((card, index) => card.classList.toggle("graveyard-collapsed", cards.length > 1 && index < cards.length - 1));
+    zone.querySelector(".zone-count").textContent = String(cards.length);
   });
 }
 
@@ -525,10 +1279,11 @@ function renderManaPool() {
     return;
   }
   available.forEach((type) => {
-    const symbol = document.createElement("span");
-    symbol.className = `mana-symbol mana-${type.toLowerCase()}`;
-    symbol.textContent = `${type} ${manaPool[type]}`;
-    manaPoolElement.append(symbol);
+    const entry = document.createElement("span");
+    entry.className = "mana-pool-entry";
+    entry.innerHTML = `${manaPipHtml(type)}<span>${manaPool[type]}</span>`;
+    entry.setAttribute("aria-label", `${manaPool[type]} ${type} mana`);
+    manaPoolElement.append(entry);
   });
 }
 
@@ -537,6 +1292,71 @@ function clearManaPool() {
     manaPool[type] = 0;
   });
   renderManaPool();
+}
+
+/** A mana ability just reads "Add ...", including the parenthesised reminder
+    text basic-ish lands print. */
+function isManaAbility(ability) {
+  return /^\(?\s*add\b/i.test(ability.effect.trim());
+}
+
+/**
+ * True when clicking the card body should simply tap it for mana: it's a land
+ * that produces mana and has nothing to activate except its mana abilities.
+ * A land with a real activated ability (a creature-land, a fetchland) returns
+ * false so the ability menu still opens.
+ */
+function landTapsOnlyForMana(card) {
+  if (!card.dataset.typeLine.includes("Land")) return false;
+  const types = JSON.parse(card.dataset.producedMana || "[]").filter((type) => MANA_TYPES.includes(type));
+  if (!types.length) return false;
+  return activatedAbilitiesFor(card).every(isManaAbility);
+}
+
+/**
+ * Dismisses the prompt the moment its land stops being mid-tap — it left the
+ * battlefield, something else tapped it, or the board went into edit mode.
+ */
+function validateManaChoicePrompt() {
+  if (!pendingManaChoice) return;
+  const { card } = pendingManaChoice;
+  const stillTapping = !editingMode
+    && card.parentElement?.dataset.zone === "player-battlefield"
+    && !card.classList.contains("tapped")
+    && landTapsOnlyForMana(card);
+  if (!stillTapping) closeManaChoicePrompt();
+}
+
+function closeManaChoicePrompt() {
+  pendingManaChoice?.card.classList.remove("choosing-mana");
+  pendingManaChoice = null;
+  manaChoicePrompt.hidden = true;
+  manaChoiceOptions.replaceChildren();
+}
+
+/** Asks which mana a multi-colour land should produce, then taps it for that. */
+function openManaChoicePrompt(card, types) {
+  closeManaChoicePrompt();
+  pendingManaChoice = { card, types };
+  card.classList.add("choosing-mana");
+  manaChoiceSource.textContent = `${card.dataset.cardName} taps for one of these.`;
+  types.forEach((type) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mana-choice-button";
+    button.innerHTML = manaPipHtml(type);
+    button.setAttribute("aria-label", `Tap ${card.dataset.cardName} for ${type} mana`);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeManaChoicePrompt();
+      // addMana taps the land, so nothing happens if the player cancels instead.
+      addMana(type, card);
+      refreshCardState(card);
+    });
+    manaChoiceOptions.append(button);
+  });
+  manaChoicePrompt.hidden = false;
+  manaChoiceOptions.querySelector("button")?.focus();
 }
 
 function addMana(type, source) {
@@ -551,21 +1371,56 @@ function addMana(type, source) {
   showMessage(`${source.dataset.cardName} added {${type}}.`, "success");
 }
 
-function arrangeMountainStacks() {
+const LAND_EDGE = 8;
+
+/**
+ * Stacks every land in a column down the right-hand side of its battlefield.
+ *
+ * Two things shape the layout. Horizontally, the battlefield gets a padding
+ * gutter so creatures never flow underneath the lands; the gutter is a card
+ * HEIGHT wide because tapping rotates a card 90deg at full size, which is the
+ * widest a land ever gets. Vertically, lands overlap by half a card so the top
+ * half of each stays readable, tightening only when there are more lands than
+ * the battlefield is tall.
+ */
+function arrangeLandStacks() {
   document.querySelectorAll('[data-zone$="battlefield"]').forEach((battlefield) => {
     [...battlefield.querySelectorAll(":scope > .board-card")].forEach((card) => {
-      const isMountain = /(?:^|—|\/\/).*\bMountain\b/i.test(card.dataset.typeLine || "");
-      card.classList.toggle("mountain-land", isMountain);
-      if (!isMountain) card.style.removeProperty("--mountain-stack-index");
+      const isLand = (card.dataset.typeLine || "").includes("Land");
+      card.classList.toggle("side-land", isLand);
+      if (!isLand) {
+        card.style.removeProperty("--land-stack-index");
+        card.style.removeProperty("--land-stack-offset");
+      }
     });
-    [...battlefield.querySelectorAll(":scope > .mountain-land")].forEach((mountain, index) => {
-      mountain.style.setProperty("--mountain-stack-index", String(index));
-      mountain.style.setProperty("--mountain-stack-offset", `${index * mountain.getBoundingClientRect().width * 0.5}px`);
+
+    const lands = [...battlefield.querySelectorAll(":scope > .side-land")];
+    if (!lands.length) {
+      battlefield.style.removeProperty("padding-inline-end");
+      battlefield.style.removeProperty("--land-right");
+      return;
+    }
+    const cardWidth = lands[0].offsetWidth || 0;
+    const cardHeight = lands[0].offsetHeight || 0;
+
+    // Reserve the tapped footprint so a rotated land stays clear of the creatures.
+    const gutter = cardHeight + LAND_EDGE * 2;
+    battlefield.style.paddingInlineEnd = `${gutter}px`;
+    battlefield.style.setProperty("--land-right", `${(gutter - cardWidth) / 2}px`);
+
+    const idealStep = cardHeight / 2;
+    const room = battlefield.clientHeight - LAND_EDGE * 2 - cardHeight;
+    const maxStep = lands.length > 1 ? room / (lands.length - 1) : idealStep;
+    const step = Math.max(0, Math.min(idealStep, maxStep));
+
+    lands.forEach((land, index) => {
+      land.style.setProperty("--land-stack-index", String(index));
+      land.style.setProperty("--land-stack-offset", `${index * step}px`);
     });
   });
 }
 
-window.addEventListener("resize", arrangeMountainStacks);
+window.addEventListener("resize", arrangeLandStacks);
 
 function untapAllPermanents(announce = true) {
   let stunCountersRemoved = 0;
@@ -624,16 +1479,30 @@ function recalculateStaticAbilities() {
   battlefieldCards.forEach((card) => {
     card.dataset.currentPower = card.dataset.basePower;
     card.dataset.currentToughness = card.dataset.baseToughness;
+    // +1/+1 counters sit on top of printed stats and outlast end-of-turn cleanup.
+    const plusCounters = Number(card.dataset.plusOneCounters || 0);
+    if (plusCounters) {
+      card.dataset.currentPower = String(Number(card.dataset.basePower || 0) + plusCounters);
+      card.dataset.currentToughness = String(Number(card.dataset.baseToughness || 0) + plusCounters);
+    }
     card.dataset.grantedKeywords = "[]";
     card.classList.remove("static-modified");
     card.querySelector(".static-stats-badge")?.remove();
+    card.querySelector(".plus-counter-badge")?.remove();
+    if (plusCounters) {
+      const badge = document.createElement("span");
+      badge.className = "plus-counter-badge";
+      badge.textContent = `+${plusCounters}/+${plusCounters}`;
+      badge.title = `${plusCounters} +1/+1 counter${plusCounters === 1 ? "" : "s"}`;
+      card.append(badge);
+    }
   });
 
   battlefieldCards.forEach((source) => {
     const sourceController = source.parentElement.dataset.zone.startsWith("opponent-") ? "opponent" : "player";
     staticAbilityLines(source).forEach((line) => {
       const statMatch = line.match(/^(Other\s+)?(.+?)\s+(you control|your opponents control)\s+get\s+([+-]\d+)\/([+-]\d+)/i);
-      const keywordMatch = line.match(/^(Other\s+)?(.+?)\s+(you control|your opponents control)\s+have\s+(flying|haste|reach|vigilance|defender)\b/i);
+      const keywordMatch = line.match(new RegExp(`^(Other\\s+)?(.+?)\\s+(you control|your opponents control)\\s+have\\s+(${keywordsWithTrait("grantable").join("|")})\\b`, "i"));
       if (!statMatch && !keywordMatch) return;
       const match = statMatch || keywordMatch;
       const excludesSource = Boolean(match[1]);
@@ -675,7 +1544,7 @@ function recalculateStaticAbilities() {
 
   battlefieldCards.forEach((card) => {
     const enteredThisTurn = Number(card.dataset.enteredTurn || 0) >= Number(window.currentTurnNumber || 1);
-    const shouldBeSummoningSick = card.dataset.typeLine.includes("Creature") && enteredThisTurn && !cardHasKeyword(card, "haste");
+    const shouldBeSummoningSick = card.dataset.typeLine.includes("Creature") && enteredThisTurn && !cardKeywordTrait(card, "ignoresSummoningSickness");
     card.classList.toggle("summoning-sick", shouldBeSummoningSick);
     const existingSicknessBadge = card.querySelector(".summoning-sick-badge");
     if (!shouldBeSummoningSick) existingSicknessBadge?.remove();
@@ -693,6 +1562,7 @@ function recalculateStaticAbilities() {
       badge.title = "Current power and toughness after static abilities";
       card.append(badge);
     }
+    updateKeywordBadge(card);
     card.querySelector(".temporary-effect-badge")?.remove();
     if (card.classList.contains("temporary-modified")) {
       const temporaryPower = Number(card.dataset.temporaryPowerModifier || 0);
@@ -777,11 +1647,11 @@ function beginCombatDeclaration() {
   clearCombatTargetPrompt();
   document.querySelectorAll('[data-zone="player-battlefield"] .board-card').forEach((card) => {
     const enteredThisTurn = Number(card.dataset.enteredTurn || 0) >= Number(window.currentTurnNumber || 1)
-      && !cardHasHaste(card);
+      && !cardKeywordTrait(card, "ignoresSummoningSickness");
     const canAttack = card.dataset.typeLine.includes("Creature")
       && !card.classList.contains("tapped")
       && !enteredThisTurn
-      && !cardHasKeyword(card, "defender")
+      && !cardKeywordTrait(card, "cannotAttack")
       && !/\bcan(?:not|'t) attack\b/i.test(card.dataset.oracleText || "");
     card.classList.toggle("summoning-sick", card.dataset.typeLine.includes("Creature") && enteredThisTurn);
     card.classList.toggle("combat-eligible", canAttack);
@@ -818,7 +1688,7 @@ function damagePlaneswalker(target, amount) {
   if (remaining === 0) {
     target.classList.add("creature-dying");
     window.setTimeout(() => {
-      document.querySelector('[data-zone="opponent-graveyard"]').append(target);
+      document.querySelector(`[data-zone="${restingZoneFor(target, "opponent")}"]`).append(target);
       target.classList.remove("creature-dying");
       refreshCardState(target);
     }, 720);
@@ -838,22 +1708,28 @@ function creatureCombatStats(card) {
 
 function chooseBestBlocker(attacker, availableBlockers) {
   const attackerStats = creatureCombatStats(attacker);
+  const attackerDeathtouch = cardKeywordTrait(attacker, "lethalOnAnyDamage");
   return [...availableBlockers].sort((left, right) => {
     const leftStats = creatureCombatStats(left);
     const rightStats = creatureCombatStats(right);
-    const rank = (stats) => {
-      const killsAttacker = stats.power >= attackerStats.remainingToughness;
-      const survivesAttacker = stats.remainingToughness > attackerStats.power;
+    const rank = (stats, blocker) => {
+      const killsAttacker = cardKeywordTrait(attacker, "indestructible")
+        ? false
+        : stats.power >= attackerStats.remainingToughness
+          || (stats.power > 0 && cardKeywordTrait(blocker, "lethalOnAnyDamage"));
+      const survivesAttacker = cardKeywordTrait(blocker, "indestructible")
+        || (stats.remainingToughness > attackerStats.power && !(attackerDeathtouch && attackerStats.power > 0));
       if (killsAttacker && survivesAttacker) return 0;
       if (killsAttacker) return 1;
       if (survivesAttacker) return 2;
       return 3;
     };
-    return rank(leftStats) - rank(rightStats)
+    return rank(leftStats, left) - rank(rightStats, right)
       || leftStats.power + leftStats.toughness - (rightStats.power + rightStats.toughness);
   })[0] || null;
 }
 
+/** Blocks are attacker → blockers[], since menace forces multi-creature blocks. */
 function declareAutomaticBlockers() {
   const available = new Set(
     [...document.querySelectorAll('[data-zone="opponent-battlefield"] .board-card')]
@@ -862,15 +1738,24 @@ function declareAutomaticBlockers() {
   const blocks = new Map();
   combatAssignments.forEach((_target, attacker) => {
     if (!available.size) return;
+    const required = blockersRequiredFor(attacker);
     const legalBlockers = [...available].filter((blocker) => canBlockAttacker(blocker, attacker));
-    const blocker = chooseBestBlocker(attacker, legalBlockers);
-    if (!blocker) return;
-    blocks.set(attacker, blocker);
-    available.delete(blocker);
+    if (legalBlockers.length < required) return;
+    const chosen = [];
+    while (chosen.length < required) {
+      const blocker = chooseBestBlocker(attacker, legalBlockers.filter((candidate) => !chosen.includes(candidate)));
+      if (!blocker) break;
+      chosen.push(blocker);
+    }
+    if (chosen.length < required) return;
+    blocks.set(attacker, chosen);
     attacker.classList.add("blocked-attacker");
-    blocker.classList.add("declared-blocker");
-    attacker.dataset.blockedBy = blocker.dataset.cardName;
-    blocker.dataset.blocking = attacker.dataset.cardName;
+    attacker.dataset.blockedBy = chosen.map((blocker) => blocker.dataset.cardName).join(", ");
+    chosen.forEach((blocker) => {
+      available.delete(blocker);
+      blocker.classList.add("declared-blocker");
+      blocker.dataset.blocking = attacker.dataset.cardName;
+    });
   });
   return blocks;
 }
@@ -883,48 +1768,124 @@ function showDeclaredBlockers(blocks) {
     : "No creatures were available to block.";
   combatTargetOptions.replaceChildren();
   if (!blocks.size) return;
-  blocks.forEach((blocker, attacker) => {
+  blocks.forEach((blockers, attacker) => {
     const assignment = document.createElement("span");
     assignment.className = "block-assignment";
-    assignment.textContent = `${blocker.dataset.cardName} blocks ${attacker.dataset.cardName}`;
+    assignment.textContent = `${blockers.map((blocker) => blocker.dataset.cardName).join(" and ")} block${blockers.length > 1 ? "" : "s"} ${attacker.dataset.cardName}`;
     combatTargetOptions.append(assignment);
   });
 }
 
-function markCombatDamage(card, amount) {
-  const stats = creatureCombatStats(card);
-  card.dataset.damageMarked = String(Number(card.dataset.damageMarked || 0) + amount);
-  updateCreatureDamageBadge(card);
-  return amount >= stats.remainingToughness;
+function adjustPlayerLife(who, delta) {
+  const input = document.querySelector(`.${who} .life-input`);
+  if (!input) return;
+  input.value = String(Math.max(0, Number(input.value || 0) + delta));
+}
+
+/** Marks damage on a creature and records whether deathtouch/toughness made it lethal. */
+function markCombatDamage(source, target, amount, state) {
+  if (amount <= 0) return;
+  target.dataset.damageMarked = String(Number(target.dataset.damageMarked || 0) + amount);
+  updateCreatureDamageBadge(target);
+  const { toughness } = creatureCombatStats(target);
+  const lethal = cardKeywordTrait(source, "lethalOnAnyDamage")
+    || Number(target.dataset.damageMarked || 0) >= toughness;
+  if (lethal && !cardKeywordTrait(target, "indestructible")) {
+    state.lethal.add(target);
+    state.alive.delete(target);
+  }
+}
+
+/**
+ * Splits an attacker's power across its blockers, lethal-damage-first. Deathtouch
+ * makes 1 damage lethal, and trample lets whatever is left over spill onto the
+ * defending player or planeswalker.
+ */
+function assignAttackerDamage(attacker, blockers) {
+  const deathtouch = cardKeywordTrait(attacker, "lethalOnAnyDamage");
+  const trample = cardKeywordTrait(attacker, "tramplesOver");
+  const events = [];
+  let remaining = creatureCombatStats(attacker).power;
+  blockers.forEach((blocker, index) => {
+    if (remaining <= 0) return;
+    const lethalNeeded = deathtouch ? 1 : Math.max(1, creatureCombatStats(blocker).remainingToughness);
+    // Without trample the excess has nowhere to go, so the last blocker soaks it.
+    const isLast = index === blockers.length - 1;
+    const assigned = !trample && isLast ? remaining : Math.min(remaining, lethalNeeded);
+    remaining -= assigned;
+    events.push({ source: attacker, target: blocker, amount: assigned });
+  });
+  return { events, trampleDamage: trample ? remaining : 0 };
 }
 
 function resolveCombatDamage(blocks) {
+  const attackers = [...combatAssignments.keys()];
+  const blockerList = [...blocks.values()].flat();
+  const state = {
+    alive: new Set([...attackers, ...blockerList]),
+    lethal: new Set(),
+    lifeGain: { player: 0, opponent: 0 },
+  };
   let opponentDamage = 0;
-  const lethalCreatures = new Set();
-  combatAssignments.forEach((target, attacker) => {
-    const attackerStats = creatureCombatStats(attacker);
-    const blocker = blocks.get(attacker);
+
+  attackers.forEach((attacker) => {
     attacker.classList.add("attacking-animation");
-    if (!cardHasKeyword(attacker, "vigilance")) attacker.classList.add("tapped");
-    if (blocker) {
-      const blockerStats = creatureCombatStats(blocker);
-      blocker.classList.add("blocking-animation");
-      if (markCombatDamage(blocker, attackerStats.power)) lethalCreatures.add(blocker);
-      if (markCombatDamage(attacker, blockerStats.power)) lethalCreatures.add(attacker);
-      emitGameEvent("damage", { card: attacker, targets: [blocker], damage: attackerStats.power });
-      emitGameEvent("damage", { card: blocker, targets: [attacker], damage: blockerStats.power });
-      return;
-    }
-    if (target.classList.contains("life-total")) opponentDamage += attackerStats.power;
-    else damagePlaneswalker(target, attackerStats.power);
-    emitGameEvent("damage", { card: attacker, targets: [target], damage: attackerStats.power });
+    if (!cardKeywordTrait(attacker, "attacksWithoutTapping")) attacker.classList.add("tapped");
+  });
+  blockerList.forEach((blocker) => blocker.classList.add("blocking-animation"));
+
+  // First strike and double strike split combat into two damage steps; anything
+  // that dies in the first step never deals its regular-step damage.
+  const anyFirstStrike = [...attackers, ...blockerList].some((card) => damageStepsFor(card).includes("first"));
+  const steps = anyFirstStrike ? ["first", "regular"] : ["regular"];
+
+  steps.forEach((step) => {
+    const creatureDamage = [];
+    const playerDamage = [];
+
+    attackers.forEach((attacker) => {
+      if (!state.alive.has(attacker) || !damageStepsFor(attacker).includes(step)) return;
+      const target = combatAssignments.get(attacker);
+      if (!blocks.has(attacker)) {
+        playerDamage.push({ source: attacker, target, amount: creatureCombatStats(attacker).power });
+        return;
+      }
+      const survivors = blocks.get(attacker).filter((blocker) => state.alive.has(blocker));
+      const { events, trampleDamage } = assignAttackerDamage(attacker, survivors);
+      creatureDamage.push(...events);
+      if (trampleDamage > 0) playerDamage.push({ source: attacker, target, amount: trampleDamage });
+    });
+
+    blocks.forEach((blockers, attacker) => {
+      blockers.forEach((blocker) => {
+        if (!state.alive.has(blocker) || !damageStepsFor(blocker).includes(step)) return;
+        if (!state.alive.has(attacker)) return;
+        creatureDamage.push({ source: blocker, target: attacker, amount: creatureCombatStats(blocker).power });
+      });
+    });
+
+    // Damage within a step is simultaneous: total it up before anything dies.
+    [...creatureDamage, ...playerDamage].forEach((event) => {
+      if (event.amount > 0 && cardKeywordTrait(event.source, "lifelink")) {
+        state.lifeGain[controllerOf(event.source)] += event.amount;
+      }
+    });
+    creatureDamage.forEach((event) => markCombatDamage(event.source, event.target, event.amount, state));
+    playerDamage.forEach((event) => {
+      if (event.amount <= 0) return;
+      if (event.target.classList.contains("life-total")) opponentDamage += event.amount;
+      else damagePlaneswalker(event.target, event.amount);
+    });
+    [...creatureDamage, ...playerDamage].forEach((event) => {
+      if (event.amount > 0) emitGameEvent("damage", { card: event.source, targets: [event.target], damage: event.amount });
+    });
   });
 
-  if (opponentDamage) {
-    const opponentLife = document.querySelector('.opponent .life-input');
-    opponentLife.value = String(Math.max(0, Number(opponentLife.value || 0) - opponentDamage));
-  }
-  lethalCreatures.forEach(sendLethalCreatureToGraveyard);
+  if (opponentDamage) adjustPlayerLife("opponent", -opponentDamage);
+  Object.entries(state.lifeGain).forEach(([who, amount]) => {
+    if (amount > 0) adjustPlayerLife(who, amount);
+  });
+  state.lethal.forEach(sendLethalCreatureToGraveyard);
   combatResolved = true;
   combatPrompt.hidden = true;
   document.querySelectorAll(".combat-eligible").forEach((card) => card.classList.remove("combat-eligible"));
@@ -934,8 +1895,14 @@ function resolveCombatDamage(blocks) {
     });
   }, 650);
   updateCombatButton();
+  const summary = [
+    opponentDamage ? `${opponentDamage} damage to the opponent` : "",
+    state.lifeGain.player ? `you gained ${state.lifeGain.player} life` : "",
+    state.lifeGain.opponent ? `the opponent gained ${state.lifeGain.opponent} life` : "",
+    state.lethal.size ? `${state.lethal.size} creature${state.lethal.size === 1 ? "" : "s"} died` : "",
+  ].filter(Boolean);
   showMessage(
-    `Combat damage resolved${opponentDamage ? `: ${opponentDamage} damage to the opponent` : blocks.size ? ": blocked creatures exchanged damage" : ""}.`,
+    `Combat damage resolved${summary.length ? `: ${summary.join(", ")}` : blocks.size ? ": blocked creatures exchanged damage" : ""}.`,
     "success",
   );
 }
@@ -969,6 +1936,7 @@ function closeImporter() {
 }
 
 function setEditingMode(enabled) {
+  closeManaChoicePrompt();
   if (enabled && activeAbilitySource) closeActivatedAbilityMenu();
   editingMode = enabled;
   document.body.classList.toggle("editing-mode", enabled);
@@ -1047,6 +2015,7 @@ function savedCardToScryfall(record) {
 }
 
 function loadBoardState(state) {
+  closeManaChoicePrompt();
   document.querySelectorAll(".board-card").forEach((card) => card.remove());
   lifeInputs.forEach((input, index) => {
     input.value = state.life?.[index] ?? "20";
@@ -1237,6 +2206,9 @@ function effectiveActivatedAbilityCost(sourceCard, printedCost) {
 }
 
 function activatedAbilitiesFor(card) {
+  // A card's printed "cost: effect" abilities don't function from the graveyard —
+  // only its graveyard keyword abilities do.
+  if (zoneKindFor(card) === "graveyard") return graveyardKeywordAbilities(card);
   const lines = (card.dataset.oracleText || "").split("\n");
   return lines.flatMap((line, lineIndex) => {
     const match = line.trim().match(/^(.+?):\s*(.+)$/);
@@ -1420,26 +2392,43 @@ function updateCreatureDamageBadge(card) {
   card.append(badge);
 }
 
+/**
+ * Where a permanent goes when it leaves the battlefield. Tokens cease to exist
+ * rather than piling up in the graveyard, so they are exiled instead.
+ */
+function restingZoneFor(card, owner) {
+  return card.dataset.isToken === "true" ? `${owner}-exile` : `${owner}-graveyard`;
+}
+
 function movePermanentToGraveyard(card, { reason = "died", announce = false } = {}) {
   if (card.classList.contains("moving-to-graveyard")) return;
   const battlefieldZone = card.parentElement?.dataset.zone || "";
   const owner = battlefieldZone.startsWith("opponent-") ? "opponent" : "player";
   const died = battlefieldZone.endsWith("-battlefield") && card.dataset.typeLine.includes("Creature");
+  const isToken = card.dataset.isToken === "true";
   card.classList.add("moving-to-graveyard");
   if (died) {
     card.classList.add("creature-dying");
+    // "Dies" triggers still see the token before it ceases to exist.
     emitGameEvent("dies", { card, controller: owner, reason });
     card.setAttribute("aria-label", `${card.dataset.cardName} ${reason === "sacrificed" ? "was sacrificed and is dying" : "has died"}.`);
   }
   const delay = died ? 720 : 0;
   window.setTimeout(() => {
-    document.querySelector(`[data-zone="${owner}-graveyard"]`).append(card);
+    document.querySelector(`[data-zone="${restingZoneFor(card, owner)}"]`).append(card);
     card.classList.remove("creature-dying", "moving-to-graveyard");
     card.classList.remove("static-lethal-pending");
     card.dataset.damageMarked = "0";
     updateCreatureDamageBadge(card);
     refreshCardState(card);
-    if (announce) showMessage(`${card.dataset.cardName} died and was put into ${owner === "player" ? "your" : "the opponent's"} graveyard.`, "error");
+    if (announce) {
+      showMessage(
+        isToken
+          ? `${card.dataset.cardName} died and was exiled — tokens cease to exist.`
+          : `${card.dataset.cardName} died and was put into ${owner === "player" ? "your" : "the opponent's"} graveyard.`,
+        "error",
+      );
+    }
   }, delay);
 }
 
@@ -1505,7 +2494,8 @@ function eligibleTargetsFor(oracleText) {
     addPlayers();
     addBattlefieldCards();
   }
-  return [...candidates];
+  // Hexproof and shroud remove permanents from the pool of legal targets.
+  return [...candidates].filter((candidate) => canBeTargetedBy(candidate, "player"));
 }
 
 function triggeredAbilitiesFor(card) {
@@ -1649,8 +2639,8 @@ function requestActivatedAbilityPayment(source, ability) {
   triggerSourceImage.alt = source.dataset.cardName;
   triggerViewerTitle.textContent = source.dataset.cardName;
   triggerViewerKind.textContent = "Pay ability cost";
-  triggerCondition.textContent = `Cost: ${ability.cost}`;
-  triggerEffect.textContent = ability.effect;
+  setManaText(triggerCondition, `Cost: ${ability.cost}`);
+  setManaText(triggerEffect, ability.effect);
   triggerTargetOptions.replaceChildren();
   const cancelButton = document.createElement("button");
   cancelButton.type = "button";
@@ -1658,7 +2648,7 @@ function requestActivatedAbilityPayment(source, ability) {
   cancelButton.addEventListener("click", closeActivatedAbilityMenu);
   triggerTargetOptions.append(cancelButton);
   resolveTriggerButton.dataset.mode = "confirm-ability-cost";
-  resolveTriggerButton.textContent = `Pay ${ability.cost}`;
+  setManaText(resolveTriggerButton, `Pay ${ability.cost}`);
   resolveTriggerButton.disabled = false;
   triggerViewer.hidden = false;
   triggerViewerBackdrop.hidden = false;
@@ -1692,6 +2682,12 @@ function showPermanentCostChoices(source, ability, requirement) {
 }
 
 function beginActivatedAbility(source, ability, selectedPermanents = null) {
+  const graveyardAbility = ability.keyword ? keywordDefinition(ability.keyword)?.graveyardAbility : null;
+  // Every graveyard keyword ability is "Activate only as a sorcery."
+  if (graveyardAbility && !["Main phase 1", "Main phase 2"].includes(window.currentTurnPhase)) {
+    showMessage(`${ability.keyword} can only be activated during your main phase. Current phase: ${window.currentTurnPhase}.`, "error");
+    return;
+  }
   const permanentRequirement = permanentCostRequirement(ability.cost, source);
   if (permanentRequirement && selectedPermanents === null) {
     showPermanentCostChoices(source, ability, permanentRequirement);
@@ -1702,14 +2698,33 @@ function beginActivatedAbility(source, ability, selectedPermanents = null) {
     showMessage(payment.reason, "error");
     return;
   }
+  if (graveyardAbility) {
+    // "Exile this card from your graveyard" is part of the activation cost.
+    if (graveyardAbility.exilesAsCost) {
+      document.querySelector('[data-zone="player-exile"]').append(source);
+      refreshCardState(source);
+    }
+    if (graveyardAbility.resolve) {
+      pendingAbilityPayment = null;
+      activeAbilitySource = null;
+      abilityCostBar.hidden = true;
+      triggerViewer.hidden = true;
+      triggerViewerBackdrop.hidden = true;
+      resolveTriggerButton.dataset.mode = "resolve";
+      graveyardAbility.resolve(source);
+      showNextTriggeredAbility();
+      return;
+    }
+    // No direct resolver (scavenge) — fall through to the normal targeting flow.
+  }
   document.querySelectorAll(".legal-ability-cost, .chosen-ability-cost").forEach((card) => card.classList.remove("legal-ability-cost", "chosen-ability-cost"));
   abilityCostBar.hidden = true;
   pendingAbilityPayment = null;
   activeAbilitySource = null;
   activeTrigger = { source, effect: ability.effect, cost: ability.cost, targets: [], context: {}, type: "activated" };
   triggerViewerKind.textContent = "Activated ability";
-  triggerCondition.textContent = `${ability.cost} paid`;
-  triggerEffect.textContent = ability.effect;
+  setManaText(triggerCondition, `${ability.cost} paid`);
+  setManaText(triggerEffect, ability.effect);
   renderAbilityTargets();
   if (targetCountFor(ability.effect) === 0) {
     resolveTriggeredAbility();
@@ -1992,9 +3007,9 @@ function activateSpellEffect(cardElement, presetTargets = []) {
   spellStackImage.alt = cardElement.dataset.cardName;
   spellStackTitle.textContent = cardElement.dataset.cardName;
   const paidCost = cardElement.dataset.lastPaidCost || cardElement.dataset.manaCost;
-  spellStackMeta.textContent = `${paidCost} · ${cardElement.dataset.typeLine}${cardElement.dataset.printedCastCost && cardElement.dataset.printedCastCost !== paidCost ? ` · reduced from ${cardElement.dataset.printedCastCost}` : ""}`;
+  setManaText(spellStackMeta, `${paidCost} · ${cardElement.dataset.typeLine}${cardElement.dataset.printedCastCost && cardElement.dataset.printedCastCost !== paidCost ? ` · reduced from ${cardElement.dataset.printedCastCost}` : ""}`);
   const effectText = resolvedOracleText(cardElement);
-  spellOracleText.textContent = effectText || "This card has no Oracle rules text.";
+  setManaText(spellOracleText, effectText || "This card has no Oracle rules text.");
   spellStack.hidden = false;
   spellStackBackdrop.hidden = false;
   document.body.classList.add("resolving-spell");
@@ -2003,6 +3018,29 @@ function activateSpellEffect(cardElement, presetTargets = []) {
     resolveSpellButton.focus();
     showMessage(`${cardElement.dataset.cardName} is on the stack. Resolve its effect.`, "success");
   }
+}
+
+/** Clears the stack UI and puts a finished (or countered) spell into its rest zone. */
+function retireResolvedSpell(card) {
+  clearTargetSelection();
+  resolvingSpell = null;
+  const destination = card.dataset.castFromFlashback === "true" || card.dataset.castExilesOnResolve === "true"
+    ? "player-exile"
+    : "player-graveyard";
+  delete card.dataset.castFromFlashback;
+  delete card.dataset.castExilesOnResolve;
+  delete card.dataset.graveyardCastKeyword;
+  delete card.dataset.lastPaidCost;
+  delete card.dataset.printedCastCost;
+  delete card.dataset.surgePaid;
+  delete card.dataset.resolutionEffectOverride;
+  document.querySelector(`[data-zone="${destination}"]`).append(card);
+  card.hidden = false;
+  card.classList.add("spell-resolved");
+  refreshCardState(card);
+  spellStack.hidden = true;
+  spellStackBackdrop.hidden = true;
+  document.body.classList.remove("resolving-spell");
 }
 
 function resolveActiveSpell() {
@@ -2021,6 +3059,15 @@ function resolveActiveSpell() {
   }
   const resolvedTargets = chosenTargets.map(targetLabel);
   const targetElements = [...chosenTargets];
+  const ward = unpaidWardTarget(targetElements);
+  if (ward) {
+    retireResolvedSpell(card);
+    showMessage(
+      `${card.dataset.cardName} was countered — ${ward.target.dataset.cardName} has ward ${ward.cost} and your mana pool couldn't pay it.`,
+      "error",
+    );
+    return;
+  }
   const counterResults = applyPlayerCounterEffects(effectText, "player", targetElements);
   const stateResults = applyPermanentStateEffects(effectText, "player", targetElements);
   const originalOracleText = card.dataset.oracleText;
@@ -2028,21 +3075,7 @@ function resolveActiveSpell() {
   const damageResults = applyResolvedDamage(card, targetElements);
   card.dataset.oracleText = originalOracleText;
   void createTokensFromEffect(effectText, "player");
-  clearTargetSelection();
-  resolvingSpell = null;
-  const destination = card.dataset.castFromFlashback === "true" ? "player-exile" : "player-graveyard";
-  delete card.dataset.castFromFlashback;
-  delete card.dataset.lastPaidCost;
-  delete card.dataset.printedCastCost;
-  delete card.dataset.surgePaid;
-  delete card.dataset.resolutionEffectOverride;
-  document.querySelector(`[data-zone="${destination}"]`).append(card);
-  card.hidden = false;
-  card.classList.add("spell-resolved");
-  refreshCardState(card);
-  spellStack.hidden = true;
-  spellStackBackdrop.hidden = true;
-  document.body.classList.remove("resolving-spell");
+  retireResolvedSpell(card);
   showMessage(
     damageResults.length || counterResults.length || stateResults.length
       ? `${card.dataset.cardName} resolved: ${[...damageResults, ...counterResults, ...stateResults].join("; ")}.`
@@ -2090,17 +3123,19 @@ function combinedManaCosts(...costs) {
   return costs.flatMap((cost) => parseCost(cost)).map((symbol) => `{${symbol}}`).join("") || "{0}";
 }
 
-function finishCardCast(cardElement, target, castingWithFlashback = false, alternateCost = "", kicked = false, surged = false) {
+function finishCardCast(cardElement, target, castingWithFlashback = false, alternateCost = "", kicked = false, surged = false, afterPayment = null) {
   abilityCostBar.hidden = true;
   cancelPermanentCostButton.textContent = "Cancel";
   pendingKickerCast = null;
   pendingSurgeCast = null;
   if (!payForCard(cardElement, alternateCost || (castingWithFlashback ? flashbackCostFor(cardElement) : ""))) return;
+  afterPayment?.();
   if (kicked) cardElement.dataset.kicked = "true";
   else delete cardElement.dataset.kicked;
   if (surged) cardElement.dataset.surgePaid = "true";
   else delete cardElement.dataset.surgePaid;
   recordAlliedSpellCast();
+  applyProwessTriggers(cardElement);
   emitGameEvent("spell-cast", { card: cardElement, kicked, surged });
   if (/Instant|Sorcery/.test(cardElement.dataset.typeLine)) {
     if (castingWithFlashback) cardElement.dataset.castFromFlashback = "true";
@@ -2162,6 +3197,13 @@ function castCardByDrop(cardElement, target) {
     showMessage(`${cardElement.dataset.cardName} played as a land.`, "success");
     return;
   }
+  if (castingWithFlashback) {
+    const options = graveyardCastOptionsFor(cardElement);
+    if (!options.length) return;
+    if (options.length > 1) offerGraveyardCastChoice(cardElement, target, options);
+    else beginGraveyardCast(cardElement, target, options[0]);
+    return;
+  }
   const kickerCost = !castingWithFlashback && typeLine.includes("Creature") ? kickerCostFor(cardElement) : "";
   if (kickerCost) {
     offerKickerChoice(cardElement, target, kickerCost);
@@ -2180,13 +3222,15 @@ function refreshCardState(element) {
   const inPlayerHand = zone === "player-hand";
   const inPlayerGraveyard = zone === "player-graveyard";
   const onPlayerBattlefield = zone === "player-battlefield";
-  const inGraveyard = zone.endsWith("-graveyard");
+  // Graveyard and exile are both "off the battlefield": reset combat state there.
+  const inGraveyard = zone.endsWith("-graveyard") || zone.endsWith("-exile");
   const isLand = element.dataset.typeLine.includes("Land");
   const manaTypes = JSON.parse(element.dataset.producedMana || "[]");
   updateStunCounterBadge(element);
+  updateKeywordBadge(element);
   element.classList.toggle(
     "has-activated-ability",
-    !editingMode && onPlayerBattlefield && activatedAbilitiesFor(element).length > 0,
+    !editingMode && (onPlayerBattlefield || inPlayerGraveyard) && activatedAbilitiesFor(element).length > 0,
   );
 
   const awaitingPlacement = element.classList.contains("awaiting-placement");
@@ -2210,25 +3254,29 @@ function refreshCardState(element) {
     element.dataset.currentToughness = element.dataset.baseToughness;
     element.classList.remove("temporary-modified");
   }
-  const flashbackCost = inPlayerGraveyard ? flashbackCostFor(element) : "";
-  const canCastWithFlashback = !editingMode && Boolean(flashbackCost);
-  element.draggable = editingMode || inPlayerHand || canCastWithFlashback;
+  const graveyardCastOptions = inPlayerGraveyard ? graveyardCastOptionsFor(element) : [];
+  const canCastFromGraveyard = !editingMode && graveyardCastOptions.length > 0;
+  const graveyardCastSummary = graveyardCastOptions.map(graveyardCastLabel).join(" · ");
+  element.draggable = editingMode || inPlayerHand || canCastFromGraveyard;
   element.setAttribute("aria-label", editingMode
     ? `${element.dataset.cardName}. Drag to move.`
     : inPlayerHand
       ? `${element.dataset.cardName}. Drag to play or cast.`
-      : canCastWithFlashback
-        ? `${element.dataset.cardName}. Flashback ${flashbackCost}. Drag to cast from the graveyard.`
+      : canCastFromGraveyard
+        ? `${element.dataset.cardName}. ${graveyardCastSummary}. Drag to cast from the graveyard.`
         : element.dataset.cardName);
   element.querySelector(".cast-card")?.remove();
   element.querySelector(".mana-actions")?.remove();
   element.querySelector(".flashback-badge")?.remove();
-  element.classList.remove("single-mana-land");
+  element.classList.remove("single-mana-land", "multi-mana-land");
 
-  if (inPlayerGraveyard && flashbackCost) {
+  if (canCastFromGraveyard) {
     const badge = document.createElement("span");
     badge.className = "flashback-badge";
-    badge.textContent = `Flashback ${flashbackCost}`;
+    setManaText(badge, graveyardCastSummary);
+    badge.title = graveyardCastOptions
+      .map((option) => keywordDefinition(option.keyword)?.summary || option.keyword)
+      .join("\n");
     element.append(badge);
   }
 
@@ -2241,13 +3289,20 @@ function refreshCardState(element) {
         : `Click ${element.dataset.cardName} to tap for {${payableManaTypes[0]}}`;
       return;
     }
+    if (landTapsOnlyForMana(element)) {
+      element.classList.add("multi-mana-land");
+      element.title = element.classList.contains("tapped")
+        ? `${element.dataset.cardName} is tapped`
+        : `Click ${element.dataset.cardName} to tap it and choose from {${payableManaTypes.join("} {")}}`;
+    }
     const actions = document.createElement("div");
     actions.className = "mana-actions";
     payableManaTypes.forEach((type) => {
       const choice = document.createElement("button");
-      choice.className = `mana-choice mana-${type.toLowerCase()}`;
+      choice.className = "mana-choice is-pip";
       choice.type = "button";
-      choice.textContent = type;
+      choice.innerHTML = manaPipHtml(type);
+      choice.setAttribute("aria-label", `Tap for {${type}}`);
       choice.title = `Tap for {${type}}`;
       choice.disabled = element.classList.contains("tapped");
       choice.addEventListener("click", () => addMana(type, element));
@@ -2259,6 +3314,7 @@ function refreshCardState(element) {
 
 function resolvePermanent(card, battlefield) {
   const castFromHand = card.parentElement?.dataset.zone === "player-hand";
+  if (card.dataset.pendingTransform === "true") transformToSecondFace(card);
   spellStack.hidden = true;
   spellStackBackdrop.hidden = true;
   document.body.classList.remove("resolving-spell");
@@ -2301,6 +3357,18 @@ function createBoardCard(card) {
   element.dataset.baseToughness = card.toughness || card.card_faces?.find((face) => face.toughness)?.toughness || "";
   element.dataset.basePower = card.power || card.card_faces?.find((face) => face.power)?.power || "";
   element.dataset.baseLoyalty = card.loyalty || card.card_faces?.find((face) => face.loyalty)?.loyalty || "";
+  const backFace = card.card_faces?.[1];
+  if (backFace) {
+    element.dataset.secondFace = JSON.stringify({
+      name: backFace.name || "",
+      typeLine: backFace.type_line || "",
+      oracleText: backFace.oracle_text || "",
+      manaCost: backFace.mana_cost || "",
+      power: backFace.power || "",
+      toughness: backFace.toughness || "",
+      image: backFace.image_uris?.normal || "",
+    });
+  }
   element.dataset.damageMarked = "0";
 
   const image = document.createElement("img");
@@ -2323,6 +3391,28 @@ function createBoardCard(card) {
   });
   element.addEventListener("click", (event) => {
     const zone = element.parentElement?.dataset.zone;
+    if (pendingManaChoice && pendingManaChoice.card !== element) closeManaChoicePrompt();
+    if (pendingGraveyardCast?.requirement) {
+      event.preventDefault();
+      event.stopPropagation();
+      const { requirement, selected, candidates } = pendingGraveyardCast;
+      if (!candidates.includes(element)) {
+        showMessage("Choose a highlighted card to pay this cost.", "error");
+        return;
+      }
+      const chosenIndex = selected.indexOf(element);
+      if (chosenIndex >= 0) selected.splice(chosenIndex, 1);
+      else if (selected.length < requirement.count) selected.push(element);
+      element.classList.toggle("chosen-ability-cost", selected.includes(element));
+      abilityCostBarCopy.textContent = requirement.optional && !selected.length
+        ? "Optional — choose one or cast without it."
+        : `Selected ${selected.length} of ${requirement.count}`;
+      payPermanentCostButton.disabled = !requirement.optional && selected.length !== requirement.count;
+      payPermanentCostButton.textContent = requirement.optional
+        ? (selected.length ? `Tap ${selected[0].dataset.cardName}` : "Cast without tapping")
+        : `Pay cost (${selected.length}/${requirement.count})`;
+      return;
+    }
     if (pendingAbilityPayment?.requirement) {
       event.preventDefault();
       event.stopPropagation();
@@ -2352,16 +3442,24 @@ function createBoardCard(card) {
       return;
     }
     const manaTypes = JSON.parse(element.dataset.producedMana || "[]").filter((type) => MANA_TYPES.includes(type));
-    if (!editingMode && zone === "player-battlefield" && element.dataset.typeLine.includes("Land") && manaTypes.length === 1 && !event.target.closest("button")) {
+    if (!editingMode && zone === "player-battlefield" && landTapsOnlyForMana(element) && !event.target.closest("button")) {
       event.preventDefault();
       event.stopPropagation();
       if (Number(element.dataset.manaReadyAt || 0) > Date.now()) return;
-      addMana(manaTypes[0], element);
-      refreshCardState(element);
+      if (element.classList.contains("tapped")) {
+        showMessage(`${element.dataset.cardName} is already tapped.`, "error");
+        return;
+      }
+      if (manaTypes.length === 1) {
+        addMana(manaTypes[0], element);
+        refreshCardState(element);
+        return;
+      }
+      openManaChoicePrompt(element, manaTypes);
       return;
     }
     const canChooseActivatedAbility = !editingMode
-      && zone === "player-battlefield"
+      && (zone === "player-battlefield" || zone === "player-graveyard")
       && activatedAbilitiesFor(element).length > 0
       && !(window.currentTurnPhase === "Combat phase" && element.classList.contains("combat-eligible"));
     if (canChooseActivatedAbility && !event.target.closest("button")) {
@@ -2436,6 +3534,7 @@ function createBoardCard(card) {
     completePointerDrag(pointerDrag.clientX, pointerDrag.clientY);
   });
   element.addEventListener("dragstart", (event) => {
+    closeManaChoicePrompt();
     const inHand = isPlayableCastSource(element);
     if (!editingMode && !inHand && !element.classList.contains("awaiting-placement")) {
       event.preventDefault();
@@ -2524,13 +3623,16 @@ importer.form.addEventListener("submit", searchCards);
 importer.toastCancel.addEventListener("click", cancelPlacement);
 clearManaButton.addEventListener("click", clearManaPool);
 document.addEventListener("turn:untap", () => {
+  closeManaChoicePrompt();
   alliedSpellCastTurn = 0;
   restoreCreaturesAtEndOfTurn();
   untapAllPermanents();
 });
 document.addEventListener("team:spellcast", recordAlliedSpellCast);
 document.addEventListener("turn:phasechange", (event) => {
+  closeManaChoicePrompt();
   emitGameEvent("phase", { phase: event.detail.phase });
+  if (event.detail.phase === "End step") resolveEndStepDelayedEffects();
   if (event.detail.phase === "Combat phase") beginCombatDeclaration();
   else {
     cleanupCombat();
@@ -2551,6 +3653,11 @@ payPermanentCostButton.addEventListener("click", () => {
   if (pendingKickerCast) {
     const { cardElement, target, kickerCost } = pendingKickerCast;
     finishCardCast(cardElement, target, false, combinedManaCosts(cardElement.dataset.manaCost, kickerCost), true);
+    return;
+  }
+  if (pendingGraveyardCast) {
+    const { card, target, option, selected } = pendingGraveyardCast;
+    finishGraveyardCast(card, target, option, [...selected]);
     return;
   }
   if (activeTrigger?.type === "activated" && targetCountFor(activeTrigger.effect) > 0) {
@@ -2581,6 +3688,12 @@ cancelPermanentCostButton.addEventListener("click", () => {
     finishCardCast(cardElement, target, false, "", false);
     return;
   }
+  if (pendingGraveyardCast) {
+    const cancelled = pendingGraveyardCast.card.dataset.cardName;
+    clearGraveyardCastPrompt();
+    showMessage(`Cancelled casting ${cancelled} from your graveyard.`, "error");
+    return;
+  }
   closeActivatedAbilityMenu();
 });
 
@@ -2601,11 +3714,11 @@ lifeInputs.forEach((input) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (editingMode && event.key.toLowerCase() === "t" && !event.target.matches("input, textarea")) {
+  if (editingMode && event.key.toLowerCase() === "t" && !event.target?.matches?.("input, textarea")) {
     const focusedCard = document.activeElement?.closest?.(".board-card");
     const card = focusedCard || hoveredBoardCard;
     const zone = card?.parentElement?.dataset.zone || "";
-    if (card?.dataset.typeLine.includes("Creature") && zone.endsWith("-battlefield")) {
+    if (card && zone.endsWith("-battlefield")) {
       event.preventDefault();
       card.classList.toggle("tapped");
       refreshCardState(card);
@@ -2614,6 +3727,10 @@ document.addEventListener("keydown", (event) => {
     }
   }
   if (event.key !== "Escape") return;
+  if (pendingManaChoice) {
+    closeManaChoicePrompt();
+    return;
+  }
   if (activeAbilitySource) {
     closeActivatedAbilityMenu();
     return;
@@ -2625,6 +3742,14 @@ document.addEventListener("keydown", (event) => {
   if (selectedCard) cancelPlacement();
   else if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
 });
+
+// Capture phase: any click that isn't the prompt or its own land ends the tap.
+document.addEventListener("click", (event) => {
+  if (!pendingManaChoice) return;
+  if (event.target.closest?.(".mana-choice-prompt")) return;
+  if (event.target.closest?.(".board-card") === pendingManaChoice.card) return;
+  closeManaChoicePrompt();
+}, { capture: true });
 
 document.addEventListener("click", (event) => {
   const attacker = event.target.closest('[data-zone="player-battlefield"] .combat-eligible');
@@ -2695,7 +3820,11 @@ zones.forEach((zone) => {
     zone.classList.remove("drag-over");
     if (draggedCard) {
       const resolvedCard = draggedCard;
+      const fromZone = resolvedCard.parentElement?.dataset.zone;
       zone.append(resolvedCard);
+      if (fromZone === "player-hand" && zone.dataset.zone === "player-graveyard") {
+        resolvedCard.dataset.discardedTurn = String(window.currentTurnNumber || 1);
+      }
       if (resolvingPermanent) {
         resolvePermanent(resolvedCard, zone);
       } else {
@@ -2712,17 +3841,26 @@ graveyardZones.forEach((zone) => {
   });
   new MutationObserver(updateGraveyardDisplays).observe(zone, { childList: true });
 });
+exileZones.forEach((zone) => {
+  new MutationObserver(updateExileDisplays).observe(zone, { childList: true });
+});
 closeGraveyardViewerButton.addEventListener("click", closeGraveyardViewer);
 graveyardViewerBackdrop.addEventListener("click", closeGraveyardViewer);
 updateGraveyardDisplays();
+updateExileDisplays();
 
-const staticAbilityObserver = new MutationObserver(() => recalculateStaticAbilities());
+const staticAbilityObserver = new MutationObserver(() => {
+  recalculateStaticAbilities();
+  validateManaChoicePrompt();
+});
 document.querySelectorAll('[data-zone$="battlefield"]').forEach((battlefield) => {
   staticAbilityObserver.observe(battlefield, { childList: true });
-  new MutationObserver(arrangeMountainStacks).observe(battlefield, { childList: true });
+  new MutationObserver(arrangeLandStacks).observe(battlefield, { childList: true });
 });
-arrangeMountainStacks();
+arrangeLandStacks();
 recalculateStaticAbilities();
 
 renderManaPool();
 setEditingMode(false);
+
+cancelManaChoiceButton.addEventListener("click", closeManaChoicePrompt);
