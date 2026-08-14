@@ -2,6 +2,312 @@ const SCRYFALL_SEARCH_URL = "https://api.scryfall.com/cards/search";
 const MAX_RESULTS = 8;
 const MANA_TYPES = ["W", "U", "B", "R", "G", "C"];
 
+/* ---------------------------------------------------------------------------
+ * Seats
+ *
+ * The board used to be two hardcoded sides told apart by a "player-" or
+ * "opponent-" zone prefix. It is now a table of up to four seats — the human
+ * plus three computer opponents — and each seat owns a zone prefix named after
+ * it. Every seat has the same set of zones, so code that used to ask "is this
+ * the opponent?" now asks which seat controls a card and compares seat ids.
+ * ------------------------------------------------------------------------- */
+
+const HUMAN_SEAT = "player";
+const AI_SEAT_IDS = ["opponent", "opponent2", "opponent3"];
+/** What a computer seat does when nobody has told it otherwise. */
+const DEFAULT_SEAT_BEHAVIOR = {
+  label: "",
+  attackTarget: "weakest",
+  attackWith: "all",
+  blockStyle: "best",
+  mainPhase: "pass",
+  drawStep: "draw",
+};
+const seatBehaviors = new Map();
+const gameBoard = document.querySelector(".game-board");
+const aiSeatTemplate = document.querySelector("#ai-seat-template");
+
+/** The computer seats at the table, in seating order. */
+function aiSeatIds() {
+  return [...document.querySelectorAll(".ai-seat")].map((section) => section.dataset.seat);
+}
+
+/** Every seat in turn order: the human takes the first turn, then each AI seat. */
+function seatIds() {
+  return [HUMAN_SEAT, ...aiSeatIds()];
+}
+
+function seatSection(seatId) {
+  return document.querySelector(`.player-side[data-seat="${seatId}"]`);
+}
+
+function seatExists(seatId) {
+  return Boolean(seatSection(seatId));
+}
+
+function isAiSeat(seatId) {
+  return seatId !== HUMAN_SEAT;
+}
+
+function behaviorFor(seatId) {
+  if (!seatBehaviors.has(seatId)) seatBehaviors.set(seatId, { ...DEFAULT_SEAT_BEHAVIOR });
+  return seatBehaviors.get(seatId);
+}
+
+/**
+ * A lone opponent is just "Your Opponent"; once the table grows they are
+ * numbered by where they sit, so the names track the seating rather than the
+ * order seats happened to be created in.
+ */
+function defaultSeatLabel(seatId) {
+  const order = aiSeatIds();
+  if (order.length <= 1) return "Your Opponent";
+  const index = order.indexOf(seatId);
+  return `Opponent ${(index < 0 ? AI_SEAT_IDS.indexOf(seatId) : index) + 1}`;
+}
+
+function seatLabel(seatId) {
+  if (seatId === HUMAN_SEAT) return "You";
+  return behaviorFor(seatId).label || defaultSeatLabel(seatId);
+}
+
+/** Writes each seat's current name through every place the board shows it. */
+function refreshSeatLabels() {
+  document.querySelectorAll(".ai-seat").forEach((section) => {
+    const label = seatLabel(section.dataset.seat);
+    section.querySelector(".seat-name").textContent = label;
+    section.querySelector(".player-counters")?.setAttribute("aria-label", `${label} counters`);
+    section.querySelector(".seat-remove")?.setAttribute("aria-label", `Remove ${label}`);
+    section.querySelector(".life-total")?.setAttribute("aria-label", `${label} life total`);
+    section.querySelector(".life-input")?.setAttribute("aria-label", `${label} HP`);
+    section.querySelectorAll(".life-adjust").forEach((button) => {
+      const direction = Number(button.dataset.delta) < 0 ? "Decrease" : "Increase";
+      button.setAttribute("aria-label", `${direction} ${label} HP`);
+    });
+    const hand = section.querySelector(".hand-zone");
+    hand?.setAttribute("aria-label", `${label} hand`);
+    if (hand) hand.querySelector(".zone-label").textContent = `${label} hand`;
+    section.querySelector(".card-piles")?.setAttribute("aria-label", `${label} card piles`);
+    const heading = section.querySelector(".battlefield-heading");
+    if (heading) heading.textContent = `${label} battlefield`;
+  });
+  window.repaintTurnState?.();
+}
+
+/** "your graveyard" vs "Second Opponent's graveyard". */
+function seatPossessive(seatId) {
+  return seatId === HUMAN_SEAT ? "your" : `${seatLabel(seatId)}'s`;
+}
+
+/** "You gained 3 life" vs "Second Opponent gained 3 life". */
+function seatSubject(seatId) {
+  return seatId === HUMAN_SEAT ? "You" : seatLabel(seatId);
+}
+
+function seatZone(seatId, zoneKind) {
+  return document.querySelector(`[data-zone="${seatId}-${zoneKind}"]`);
+}
+
+function seatLifeTotal(seatId) {
+  return seatSection(seatId)?.querySelector(".life-total") || null;
+}
+
+function seatLifeValue(seatId) {
+  return Number(seatSection(seatId)?.querySelector(".life-input")?.value || 0);
+}
+
+/** Which seat a life-total element or board card belongs to. */
+function seatOfElement(element) {
+  if (!element) return HUMAN_SEAT;
+  const zone = element.parentElement?.dataset.zone || "";
+  const prefix = zone.split("-")[0];
+  if (prefix && seatExists(prefix)) return prefix;
+  return element.closest?.(".player-side")?.dataset.seat || HUMAN_SEAT;
+}
+
+function seatsOtherThan(seatId) {
+  return seatIds().filter((candidate) => candidate !== seatId);
+}
+
+/**
+ * Slot 1 and 2 are the top corners, slot 3 the bottom-right; the human always
+ * holds the bottom-left. The seat count drives the grid rules that let a board
+ * with fewer than three AI seats stretch back out to the old full-width look.
+ */
+function assignSeatSlots() {
+  const seats = [...document.querySelectorAll(".ai-seat")];
+  seats.forEach((section, index) => {
+    section.dataset.seatSlot = String(index + 1);
+  });
+  gameBoard.dataset.seatCount = String(seats.length + 1);
+}
+
+function buildSeat(seatId) {
+  const holder = document.createElement("div");
+  holder.innerHTML = aiSeatTemplate.innerHTML
+    .replaceAll("__SEAT__", seatId)
+    .replaceAll("__LABEL__", "Opponent");
+  const section = holder.firstElementChild;
+  // The third AI seat sits below the divider, so it follows the human in the DOM.
+  if (aiSeatIds().length >= 2) gameBoard.append(section);
+  else gameBoard.insertBefore(section, document.querySelector(".turn-divider"));
+  section.querySelectorAll(".drop-zone").forEach(registerZone);
+  behaviorFor(seatId);
+  assignSeatSlots();
+  // Adding a seat renames the others: one opponent becomes Opponent 1.
+  refreshSeatLabels();
+  return section;
+}
+
+/**
+ * Reshapes the table to match a save — the seats it recorded, no more, no less.
+ * Saves written before multiplayer have no seat list and restore as a 1v1 board.
+ */
+function restoreSeatsFromState(state) {
+  const wanted = AI_SEAT_IDS.filter((seatId) => (
+    state.aiSeats?.length ? state.aiSeats.includes(seatId) : seatId === AI_SEAT_IDS[0]
+  ));
+  aiSeatIds().forEach((seatId) => {
+    if (!wanted.includes(seatId)) {
+      seatSection(seatId)?.remove();
+      seatBehaviors.delete(seatId);
+    }
+  });
+  wanted.forEach((seatId) => {
+    if (!seatExists(seatId)) buildSeat(seatId);
+  });
+  assignSeatSlots();
+  refreshSeatLabels();
+}
+
+/** The lowest unused AI seat id, or null when the table is full. */
+function nextFreeSeatId() {
+  return AI_SEAT_IDS.find((seatId) => !seatExists(seatId)) || null;
+}
+
+function addSeat() {
+  const seatId = nextFreeSeatId();
+  if (!seatId) return;
+  buildSeat(seatId);
+  syncSeatControls();
+  recalculateStaticAbilities();
+  showMessage(`${seatLabel(seatId)} joined the table. Open its behavior settings to decide how it plays.`, "success");
+}
+
+function removeSeat(seatId) {
+  const section = seatSection(seatId);
+  if (!section || !isAiSeat(seatId)) return;
+  const removedLabel = seatLabel(seatId);
+  // Anything this seat had in play leaves with it, including cards mid-combat.
+  section.querySelectorAll(".board-card").forEach((card) => {
+    combatAssignments.delete(card);
+    card.remove();
+  });
+  combatAssignments.forEach((target, attacker) => {
+    if (section.contains(target)) {
+      combatAssignments.delete(attacker);
+      attacker.classList.remove("declared-attacker");
+      delete attacker.dataset.attackTarget;
+    }
+  });
+  section.remove();
+  seatBehaviors.delete(seatId);
+  refreshSeatLabels();
+  // The seat may have been mid-turn; hand the turn back to the human.
+  if (window.currentTurnSeat === seatId) window.setTurnState?.(window.currentTurnPhase || "Untap", window.currentTurnNumber || 1, HUMAN_SEAT);
+  assignSeatSlots();
+  syncSeatControls();
+  recalculateStaticAbilities();
+  updateGraveyardDisplays();
+  updateExileDisplays();
+  updateCombatButton();
+  showMessage(`${removedLabel} left the table.`, "success");
+}
+
+/** Reflects edit mode and the seat cap on the add/remove controls. */
+function syncSeatControls() {
+  addSeatButton.disabled = !editingMode || !nextFreeSeatId();
+  // The last opponent cannot leave — a board with no opponent has nothing to solve.
+  document.querySelectorAll(".ai-seat .seat-remove").forEach((button) => {
+    button.disabled = aiSeatIds().length <= 1;
+  });
+}
+
+/**
+ * Wires a zone for placement clicks, drag and drop, and whichever pile display
+ * it drives. Called for the human's zones at startup and for each AI seat's
+ * zones as that seat is created.
+ */
+function registerZone(zone) {
+  // Seats register their own zones as they are built, so guard against the
+  // startup sweep wiring the same zone a second time.
+  if (zone.dataset.zoneRegistered === "true") return;
+  zone.dataset.zoneRegistered = "true";
+  const zoneName = zone.dataset.zone || "";
+  zone.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    if (event.target.closest(".board-card") && !selectedCard) return;
+    if (selectedPermanent && zoneName === "player-battlefield") {
+      resolvePermanent(selectedPermanent, zone);
+      return;
+    }
+    placeSelectedCard(zone);
+  });
+  zone.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && selectedCard) {
+      event.preventDefault();
+      placeSelectedCard(zone);
+    }
+  });
+  zone.addEventListener("dragover", (event) => {
+    const resolvingPermanent = draggedCard?.classList.contains("awaiting-placement");
+    const validResolution = resolvingPermanent && zoneName === "player-battlefield";
+    if (!draggedCard || (!editingMode && !validResolution)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    zone.classList.add("drag-over");
+  });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (event) => {
+    const resolvingPermanent = draggedCard?.classList.contains("awaiting-placement");
+    const validResolution = resolvingPermanent && zoneName === "player-battlefield";
+    if (!editingMode && !validResolution) return;
+    event.preventDefault();
+    zone.classList.remove("drag-over");
+    if (draggedCard) {
+      const resolvedCard = draggedCard;
+      const fromZone = resolvedCard.parentElement?.dataset.zone;
+      zone.append(resolvedCard);
+      if (fromZone === "player-hand" && zoneName === "player-graveyard") {
+        resolvedCard.dataset.discardedTurn = String(window.currentTurnNumber || 1);
+      }
+      if (resolvingPermanent) {
+        resolvePermanent(resolvedCard, zone);
+      } else {
+        refreshCardState(resolvedCard);
+      }
+    }
+  });
+
+  if (zoneName.endsWith("-graveyard")) {
+    zone.querySelector(".view-graveyard").addEventListener("click", (event) => {
+      event.stopPropagation();
+      openGraveyardViewer(zone);
+    });
+    new MutationObserver(updateGraveyardDisplays).observe(zone, { childList: true });
+  }
+  if (zoneName.endsWith("-exile")) {
+    new MutationObserver(updateExileDisplays).observe(zone, { childList: true });
+  }
+  if (zoneName.endsWith("-battlefield")) {
+    new MutationObserver(() => {
+      recalculateStaticAbilities();
+      validateManaChoicePrompt();
+    }).observe(zone, { childList: true });
+    new MutationObserver(arrangeLandStacks).observe(zone, { childList: true });
+  }
+}
+
 const importer = {
   editToggle: document.querySelector(".edit-toggle"),
   editBanner: document.querySelector(".edit-mode-banner"),
@@ -25,10 +331,12 @@ const abilityCostBar = document.querySelector(".ability-cost-bar");
 const abilityCostBarCopy = abilityCostBar.querySelector("span");
 const payPermanentCostButton = abilityCostBar.querySelector(".pay-permanent-cost");
 const cancelPermanentCostButton = abilityCostBar.querySelector(".cancel-permanent-cost");
-const lifeInputs = [...document.querySelectorAll(".life-input")];
-const lifeAdjustButtons = [...document.querySelectorAll(".life-adjust")];
-const playerCounterElements = [...document.querySelectorAll(".player-counter")];
-const zones = [...document.querySelectorAll(".drop-zone")];
+// Seats can be added and removed while the board is being authored, so these
+// collections are queried live rather than snapshotted once at startup.
+const allLifeInputs = () => [...document.querySelectorAll(".life-input")];
+const allLifeAdjustButtons = () => [...document.querySelectorAll(".life-adjust")];
+const allPlayerCounters = () => [...document.querySelectorAll(".player-counter")];
+const allZones = () => [...document.querySelectorAll(".drop-zone")];
 const spellStack = document.querySelector(".spell-stack");
 const spellStackBackdrop = document.querySelector(".spell-stack-backdrop");
 const spellStackImage = document.querySelector(".spell-stack-image");
@@ -50,6 +358,12 @@ const cardHoverPreview = document.querySelector(".card-hover-preview");
 const cardHoverPreviewImage = cardHoverPreview.querySelector("img");
 const saveManagerTrigger = document.querySelector(".save-manager-trigger");
 const clearBoardButton = document.querySelector(".clear-board");
+const addSeatButton = document.querySelector(".add-seat");
+const seatBehaviorPanel = document.querySelector(".seat-behavior-panel");
+const seatBehaviorBackdrop = document.querySelector(".seat-behavior-backdrop");
+const seatBehaviorTitle = document.querySelector("#seat-behavior-title");
+const seatBehaviorForm = document.querySelector(".seat-behavior-form");
+const closeSeatBehaviorButton = document.querySelector(".close-seat-behavior");
 const saveManager = document.querySelector(".save-manager");
 const saveManagerBackdrop = document.querySelector(".save-manager-backdrop");
 const closeSaveManagerButton = document.querySelector(".close-save-manager");
@@ -59,8 +373,6 @@ const graveyardViewerBackdrop = document.querySelector(".graveyard-viewer-backdr
 const graveyardViewerTitle = document.querySelector("#graveyard-viewer-title");
 const graveyardViewerCards = document.querySelector(".graveyard-viewer-cards");
 const closeGraveyardViewerButton = document.querySelector(".close-graveyard-viewer");
-const graveyardZones = [...document.querySelectorAll('[data-zone$="graveyard"]')];
-const exileZones = [...document.querySelectorAll('[data-zone$="exile"]')];
 const triggerViewer = document.querySelector(".trigger-viewer");
 const triggerViewerBackdrop = document.querySelector(".trigger-viewer-backdrop");
 const triggerViewerKind = document.querySelector(".trigger-viewer-kind");
@@ -525,7 +837,7 @@ function zoneKindFor(cardElement) {
 }
 
 function controllerOf(cardElement) {
-  return cardElement.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  return seatOfElement(cardElement);
 }
 
 /** Printed keywords plus anything granted by static anthems or until-end-of-turn effects. */
@@ -605,7 +917,7 @@ function wardCostFor(cardElement) {
 function unpaidWardTarget(targets) {
   for (const target of targets) {
     if (!target?.classList?.contains("board-card")) continue;
-    if (controllerOf(target) !== "opponent" || !cardKeywordTrait(target, "wardTax")) continue;
+    if (controllerOf(target) === HUMAN_SEAT || !cardKeywordTrait(target, "wardTax")) continue;
     const cost = wardCostFor(target);
     if (!cost) continue;
     const payment = spendManaFor(cost);
@@ -848,8 +1160,9 @@ function resolveTokenCopyKeyword(card, { flavor, power, toughness, attacking = f
   battlefield.append(token);
   if (attacking) {
     token.classList.add("declared-attacker");
-    token.dataset.attackTarget = "Enemy Planeswalker";
-    if (window.currentTurnPhase === "Combat phase") combatAssignments.set(token, document.querySelector(".opponent .life-total"));
+    const defender = seatsOtherThan(HUMAN_SEAT)[0];
+    token.dataset.attackTarget = seatLabel(defender);
+    if (window.currentTurnPhase === "Combat phase") combatAssignments.set(token, seatLifeTotal(defender));
   }
   token.classList.add("token-created");
   window.setTimeout(() => token.classList.remove("token-created"), 650);
@@ -1047,7 +1360,7 @@ async function createTokensFromEffect(effect, controller) {
 }
 
 function addPlayerCounter(player, type, amount) {
-  const counter = document.querySelector(`.${player} .player-counter[data-counter="${type}"]`);
+  const counter = seatSection(player)?.querySelector(`.player-counter[data-counter="${type}"]`);
   if (!counter) return;
   const nextValue = Number(counter.dataset.value || 0) + amount;
   counter.dataset.value = String(nextValue);
@@ -1064,12 +1377,12 @@ function applyPlayerCounterEffects(effect, controller, targets = []) {
   const type = match[2].toLowerCase();
   const recipients = new Set();
   if (/\b(you get|you gain)/i.test(effect)) recipients.add(controller);
-  if (/\beach opponent\b/i.test(effect)) recipients.add(controller === "player" ? "opponent" : "player");
+  if (/\beach opponent\b/i.test(effect)) seatsOtherThan(controller).forEach((seatId) => recipients.add(seatId));
   targets.filter((target) => target.classList.contains("life-total")).forEach((target) => {
-    recipients.add(target.closest(".opponent") ? "opponent" : "player");
+    recipients.add(seatOfElement(target));
   });
   recipients.forEach((player) => addPlayerCounter(player, type, amount));
-  return [...recipients].map((player) => `${player} gained ${amount} ${type} counter${amount === 1 ? "" : "s"}`);
+  return [...recipients].map((player) => `${seatSubject(player)} gained ${amount} ${type} counter${amount === 1 ? "" : "s"}`);
 }
 
 function updateStunCounterBadge(card) {
@@ -1194,7 +1507,7 @@ function hideCardHoverPreview() {
 }
 
 function updateGraveyardDisplays() {
-  graveyardZones.forEach((zone) => {
+  document.querySelectorAll('[data-zone$="graveyard"]').forEach((zone) => {
     const cards = [...zone.querySelectorAll(":scope > .board-card")];
     cards.forEach((card, index) => card.classList.toggle("graveyard-collapsed", cards.length > 1 && index < cards.length - 1));
     zone.querySelector(".zone-count").textContent = String(cards.length);
@@ -1206,7 +1519,7 @@ function updateGraveyardDisplays() {
 
 /** Exile has no viewer button, just a running count of what's been exiled. */
 function updateExileDisplays() {
-  exileZones.forEach((zone) => {
+  document.querySelectorAll('[data-zone$="exile"]').forEach((zone) => {
     const cards = [...zone.querySelectorAll(":scope > .board-card")];
     cards.forEach((card, index) => card.classList.toggle("graveyard-collapsed", cards.length > 1 && index < cards.length - 1));
     zone.querySelector(".zone-count").textContent = String(cards.length);
@@ -1218,7 +1531,8 @@ function openGraveyardViewer(zone) {
   const zoneRect = zone.getBoundingClientRect();
   graveyardViewer.style.setProperty("--grave-origin-x", `${zoneRect.left + zoneRect.width / 2 - window.innerWidth / 2}px`);
   graveyardViewer.style.setProperty("--grave-origin-y", `${zoneRect.top + zoneRect.height / 2 - window.innerHeight / 2}px`);
-  graveyardViewerTitle.textContent = zone.dataset.zone.startsWith("opponent-") ? "Opponent graveyard" : "Your graveyard";
+  const possessive = seatPossessive(zone.dataset.zone.split("-")[0]);
+  graveyardViewerTitle.textContent = `${possessive[0].toUpperCase()}${possessive.slice(1)} graveyard`;
   graveyardViewerCards.replaceChildren();
   cards.forEach((card) => {
     const preview = document.createElement("article");
@@ -1424,19 +1738,21 @@ window.addEventListener("resize", arrangeLandStacks);
 
 function untapAllPermanents(announce = true) {
   let stunCountersRemoved = 0;
-  document.querySelectorAll('[data-zone="player-battlefield"] .board-card.tapped').forEach((card) => {
+  const seatId = activeSeat();
+  document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card.tapped`).forEach((card) => {
     if (untapPermanent(card).stunRemoved) stunCountersRemoved += 1;
   });
-  document.querySelectorAll('[data-zone="player-battlefield"] .board-card.summoning-sick').forEach((card) => {
+  document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card.summoning-sick`).forEach((card) => {
     if (Number(card.dataset.enteredTurn) < Number(window.currentTurnNumber || 1)) {
       card.classList.remove("summoning-sick");
       card.querySelector(".summoning-sick-badge")?.remove();
     }
   });
   clearManaPool();
+  const whose = seatId === HUMAN_SEAT ? "your" : `${seatLabel(seatId)}'s`;
   if (announce) showMessage(stunCountersRemoved
     ? `Untap step: ${stunCountersRemoved} stun counter${stunCountersRemoved === 1 ? " was" : "s were"} removed; those permanents stayed tapped.`
-    : "Untap step: all your permanents untapped.", "success");
+    : `Untap step: all ${whose} permanents untapped.`, "success");
 }
 
 function restoreCreaturesAtEndOfTurn() {
@@ -1499,7 +1815,7 @@ function recalculateStaticAbilities() {
   });
 
   battlefieldCards.forEach((source) => {
-    const sourceController = source.parentElement.dataset.zone.startsWith("opponent-") ? "opponent" : "player";
+    const sourceController = seatOfElement(source);
     staticAbilityLines(source).forEach((line) => {
       const statMatch = line.match(/^(Other\s+)?(.+?)\s+(you control|your opponents control)\s+get\s+([+-]\d+)\/([+-]\d+)/i);
       const keywordMatch = line.match(new RegExp(`^(Other\\s+)?(.+?)\\s+(you control|your opponents control)\\s+have\\s+(${keywordsWithTrait("grantable").join("|")})\\b`, "i"));
@@ -1509,7 +1825,7 @@ function recalculateStaticAbilities() {
       const subject = match[2];
       const affectsOpponents = match[3].toLowerCase().includes("opponents");
       battlefieldCards.forEach((card) => {
-        const cardController = card.parentElement.dataset.zone.startsWith("opponent-") ? "opponent" : "player";
+        const cardController = seatOfElement(card);
         if (excludesSource && card === source) return;
         if ((affectsOpponents ? cardController === sourceController : cardController !== sourceController) || !staticSubjectMatches(card, subject)) return;
         if (statMatch) {
@@ -1589,7 +1905,12 @@ function recalculateStaticAbilities() {
 }
 
 function combatTargetLabel(target) {
-  return target.classList.contains("life-total") ? "Enemy Planeswalker" : target.dataset.cardName;
+  return target.classList.contains("life-total") ? seatLabel(seatOfElement(target)) : target.dataset.cardName;
+}
+
+/** The seat that would take the damage if this attack goes unblocked. */
+function defendingSeatOf(target) {
+  return seatOfElement(target);
 }
 
 function updateCombatButton() {
@@ -1609,11 +1930,15 @@ function clearCombatTargetPrompt() {
   document.querySelectorAll(".legal-combat-target").forEach((target) => target.classList.remove("legal-combat-target"));
 }
 
-function combatTargets() {
-  return [
-    document.querySelector('.opponent .life-total'),
-    ...document.querySelectorAll('[data-zone="opponent-battlefield"] .board-card[data-type-line*="Planeswalker"]'),
-  ].filter(Boolean);
+/**
+ * Anyone but the attacking seat is a legal defender: each rival's life total,
+ * plus any planeswalker they control.
+ */
+function combatTargets(attackingSeat = HUMAN_SEAT) {
+  return seatsOtherThan(attackingSeat).flatMap((seatId) => [
+    seatLifeTotal(seatId),
+    ...document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card[data-type-line*="Planeswalker"]`),
+  ]).filter(Boolean);
 }
 
 function chooseAttackerTarget(attacker) {
@@ -1622,7 +1947,7 @@ function chooseAttackerTarget(attacker) {
   attacker.classList.add("choosing-attack-target");
   combatAttackerName.textContent = `${attacker.dataset.cardName} (${attacker.dataset.currentPower || attacker.dataset.basePower || "?"} power)`;
   combatTargetOptions.replaceChildren();
-  combatTargets().forEach((target) => {
+  combatTargets(controllerOf(attacker)).forEach((target) => {
     target.classList.add("legal-combat-target");
     const button = document.createElement("button");
     button.type = "button";
@@ -1641,22 +1966,33 @@ function chooseAttackerTarget(attacker) {
   combatPrompt.hidden = false;
 }
 
+/** A creature can be declared as an attacker if it is awake, untapped and willing. */
+function canDeclareAsAttacker(card) {
+  const enteredThisTurn = Number(card.dataset.enteredTurn || 0) >= Number(window.currentTurnNumber || 1)
+    && !cardKeywordTrait(card, "ignoresSummoningSickness");
+  return card.dataset.typeLine.includes("Creature")
+    && !card.classList.contains("tapped")
+    && !enteredThisTurn
+    && !cardKeywordTrait(card, "cannotAttack")
+    && !/\bcan(?:not|'t) attack\b/i.test(card.dataset.oracleText || "");
+}
+
 function beginCombatDeclaration() {
   combatAssignments = new Map();
   combatResolved = false;
   clearCombatTargetPrompt();
-  document.querySelectorAll('[data-zone="player-battlefield"] .board-card').forEach((card) => {
+  const attackingSeat = activeSeat();
+  document.querySelectorAll(`[data-zone="${attackingSeat}-battlefield"] .board-card`).forEach((card) => {
     const enteredThisTurn = Number(card.dataset.enteredTurn || 0) >= Number(window.currentTurnNumber || 1)
       && !cardKeywordTrait(card, "ignoresSummoningSickness");
-    const canAttack = card.dataset.typeLine.includes("Creature")
-      && !card.classList.contains("tapped")
-      && !enteredThisTurn
-      && !cardKeywordTrait(card, "cannotAttack")
-      && !/\bcan(?:not|'t) attack\b/i.test(card.dataset.oracleText || "");
     card.classList.toggle("summoning-sick", card.dataset.typeLine.includes("Creature") && enteredThisTurn);
-    card.classList.toggle("combat-eligible", canAttack);
+    card.classList.toggle("combat-eligible", canDeclareAsAttacker(card));
   });
   updateCombatButton();
+  if (isAiSeat(attackingSeat)) {
+    declareAiAttackers(attackingSeat);
+    return;
+  }
   showMessage("Declare attackers: select an untapped creature, then choose what it attacks.");
 }
 
@@ -1688,7 +2024,7 @@ function damagePlaneswalker(target, amount) {
   if (remaining === 0) {
     target.classList.add("creature-dying");
     window.setTimeout(() => {
-      document.querySelector(`[data-zone="${restingZoneFor(target, "opponent")}"]`).append(target);
+      document.querySelector(`[data-zone="${restingZoneFor(target, controllerOf(target))}"]`).append(target);
       target.classList.remove("creature-dying");
       refreshCardState(target);
     }, 720);
@@ -1729,40 +2065,91 @@ function chooseBestBlocker(attacker, availableBlockers) {
   })[0] || null;
 }
 
-/** Blocks are attacker → blockers[], since menace forces multi-creature blocks. */
+/** Untapped creatures a seat could still put in front of an attacker. */
+function blockerPoolFor(seatId) {
+  return [...document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card`)]
+    .filter((card) => card.dataset.typeLine.includes("Creature") && !card.classList.contains("tapped"));
+}
+
+/** A block is worth making if the blocker kills the attacker or lives through it. */
+function blockIsProfitable(attacker, blocker) {
+  const attackerStats = creatureCombatStats(attacker);
+  const blockerStats = creatureCombatStats(blocker);
+  const killsAttacker = !cardKeywordTrait(attacker, "indestructible")
+    && (blockerStats.power >= attackerStats.remainingToughness
+      || (blockerStats.power > 0 && cardKeywordTrait(blocker, "lethalOnAnyDamage")));
+  const survives = cardKeywordTrait(blocker, "indestructible")
+    || (blockerStats.remainingToughness > attackerStats.power
+      && !(cardKeywordTrait(attacker, "lethalOnAnyDamage") && attackerStats.power > 0));
+  return killsAttacker || survives;
+}
+
+/** Chump blocking spends the least valuable body available. */
+function cheapestBlocker(availableBlockers) {
+  return [...availableBlockers].sort((left, right) => {
+    const leftStats = creatureCombatStats(left);
+    const rightStats = creatureCombatStats(right);
+    return (leftStats.power + leftStats.toughness) - (rightStats.power + rightStats.toughness);
+  })[0] || null;
+}
+
+/**
+ * Blocks are attacker → blockers[], since menace forces multi-creature blocks.
+ * Attackers are grouped by the seat they are attacking, and each defending seat
+ * blocks in whatever style its behavior settings call for. The human's seat
+ * blocks with the best available trade.
+ */
 function declareAutomaticBlockers() {
-  const available = new Set(
-    [...document.querySelectorAll('[data-zone="opponent-battlefield"] .board-card')]
-      .filter((card) => card.dataset.typeLine.includes("Creature") && !card.classList.contains("tapped")),
-  );
   const blocks = new Map();
-  combatAssignments.forEach((_target, attacker) => {
-    if (!available.size) return;
-    const required = blockersRequiredFor(attacker);
-    const legalBlockers = [...available].filter((blocker) => canBlockAttacker(blocker, attacker));
-    if (legalBlockers.length < required) return;
-    const chosen = [];
-    while (chosen.length < required) {
-      const blocker = chooseBestBlocker(attacker, legalBlockers.filter((candidate) => !chosen.includes(candidate)));
-      if (!blocker) break;
-      chosen.push(blocker);
-    }
-    if (chosen.length < required) return;
-    blocks.set(attacker, chosen);
-    attacker.classList.add("blocked-attacker");
-    attacker.dataset.blockedBy = chosen.map((blocker) => blocker.dataset.cardName).join(", ");
-    chosen.forEach((blocker) => {
-      available.delete(blocker);
-      blocker.classList.add("declared-blocker");
-      blocker.dataset.blocking = attacker.dataset.cardName;
+  const attackersByDefender = new Map();
+  combatAssignments.forEach((target, attacker) => {
+    const seatId = defendingSeatOf(target);
+    if (!attackersByDefender.has(seatId)) attackersByDefender.set(seatId, []);
+    attackersByDefender.get(seatId).push(attacker);
+  });
+
+  attackersByDefender.forEach((attackers, seatId) => {
+    const style = isAiSeat(seatId) ? behaviorFor(seatId).blockStyle : "best";
+    if (style === "never") return;
+    const available = new Set(blockerPoolFor(seatId));
+    // A chump blocker wants to stop the biggest attacker first.
+    const order = style === "chump"
+      ? [...attackers].sort((left, right) => creatureCombatStats(right).power - creatureCombatStats(left).power)
+      : attackers;
+    order.forEach((attacker) => {
+      if (!available.size) return;
+      const required = blockersRequiredFor(attacker);
+      const legalBlockers = [...available].filter((blocker) => canBlockAttacker(blocker, attacker));
+      if (legalBlockers.length < required) return;
+      const chosen = [];
+      while (chosen.length < required) {
+        const pool = legalBlockers.filter((candidate) => !chosen.includes(candidate));
+        const blocker = style === "chump" ? cheapestBlocker(pool) : chooseBestBlocker(attacker, pool);
+        if (!blocker) break;
+        if (style === "profitable" && !blockIsProfitable(attacker, blocker)) break;
+        chosen.push(blocker);
+      }
+      // Menace and friends mean a partial block is no block at all.
+      if (chosen.length < required) return;
+      blocks.set(attacker, chosen);
+      attacker.classList.add("blocked-attacker");
+      attacker.dataset.blockedBy = chosen.map((blocker) => blocker.dataset.cardName).join(", ");
+      chosen.forEach((blocker) => {
+        available.delete(blocker);
+        blocker.classList.add("declared-blocker");
+        blocker.dataset.blocking = attacker.dataset.cardName;
+      });
     });
   });
   return blocks;
 }
 
 function showDeclaredBlockers(blocks) {
+  const defenders = [...new Set([...combatAssignments.values()].map(defendingSeatOf))];
   combatPrompt.hidden = false;
-  combatPrompt.querySelector("strong").textContent = "Opponent declared blockers";
+  combatPrompt.querySelector("strong").textContent = defenders.length === 1
+    ? `${seatLabel(defenders[0])} declared blockers`
+    : "Blockers declared";
   combatAttackerName.textContent = blocks.size
     ? "Blocked creatures will exchange combat damage."
     : "No creatures were available to block.";
@@ -1777,7 +2164,7 @@ function showDeclaredBlockers(blocks) {
 }
 
 function adjustPlayerLife(who, delta) {
-  const input = document.querySelector(`.${who} .life-input`);
+  const input = seatSection(who)?.querySelector(".life-input");
   if (!input) return;
   input.value = String(Math.max(0, Number(input.value || 0) + delta));
 }
@@ -1824,9 +2211,10 @@ function resolveCombatDamage(blocks) {
   const state = {
     alive: new Set([...attackers, ...blockerList]),
     lethal: new Set(),
-    lifeGain: { player: 0, opponent: 0 },
+    lifeGain: Object.fromEntries(seatIds().map((seatId) => [seatId, 0])),
   };
-  let opponentDamage = 0;
+  // Combat can hit several seats at once, so damage to players is tallied per seat.
+  const damageBySeat = Object.fromEntries(seatIds().map((seatId) => [seatId, 0]));
 
   attackers.forEach((attacker) => {
     attacker.classList.add("attacking-animation");
@@ -1867,13 +2255,17 @@ function resolveCombatDamage(blocks) {
     // Damage within a step is simultaneous: total it up before anything dies.
     [...creatureDamage, ...playerDamage].forEach((event) => {
       if (event.amount > 0 && cardKeywordTrait(event.source, "lifelink")) {
-        state.lifeGain[controllerOf(event.source)] += event.amount;
+        const gainer = controllerOf(event.source);
+        state.lifeGain[gainer] = (state.lifeGain[gainer] || 0) + event.amount;
       }
     });
     creatureDamage.forEach((event) => markCombatDamage(event.source, event.target, event.amount, state));
     playerDamage.forEach((event) => {
       if (event.amount <= 0) return;
-      if (event.target.classList.contains("life-total")) opponentDamage += event.amount;
+      if (event.target.classList.contains("life-total")) {
+        const defender = defendingSeatOf(event.target);
+        damageBySeat[defender] = (damageBySeat[defender] || 0) + event.amount;
+      }
       else damagePlaneswalker(event.target, event.amount);
     });
     [...creatureDamage, ...playerDamage].forEach((event) => {
@@ -1881,7 +2273,9 @@ function resolveCombatDamage(blocks) {
     });
   });
 
-  if (opponentDamage) adjustPlayerLife("opponent", -opponentDamage);
+  Object.entries(damageBySeat).forEach(([who, amount]) => {
+    if (amount > 0) adjustPlayerLife(who, -amount);
+  });
   Object.entries(state.lifeGain).forEach(([who, amount]) => {
     if (amount > 0) adjustPlayerLife(who, amount);
   });
@@ -1896,15 +2290,23 @@ function resolveCombatDamage(blocks) {
   }, 650);
   updateCombatButton();
   const summary = [
-    opponentDamage ? `${opponentDamage} damage to the opponent` : "",
-    state.lifeGain.player ? `you gained ${state.lifeGain.player} life` : "",
-    state.lifeGain.opponent ? `the opponent gained ${state.lifeGain.opponent} life` : "",
+    ...Object.entries(damageBySeat)
+      .filter(([, amount]) => amount > 0)
+      .map(([who, amount]) => `${amount} damage to ${who === HUMAN_SEAT ? "you" : seatLabel(who)}`),
+    ...Object.entries(state.lifeGain)
+      .filter(([, amount]) => amount > 0)
+      .map(([who, amount]) => `${seatSubject(who)} gained ${amount} life`),
     state.lethal.size ? `${state.lethal.size} creature${state.lethal.size === 1 ? "" : "s"} died` : "",
   ].filter(Boolean);
   showMessage(
     `Combat damage resolved${summary.length ? `: ${summary.join(", ")}` : blocks.size ? ": blocked creatures exchanged damage" : ""}.`,
     "success",
   );
+  // A computer seat carries its own turn forward once combat has settled.
+  if (isAiSeat(activeSeat()) && !editingMode) {
+    nextPhaseButton.disabled = false;
+    scheduleAiStep(() => window.advancePhase());
+  }
 }
 
 window.finishCombatAttackers = function finishCombatAttackers() {
@@ -1914,12 +2316,268 @@ window.finishCombatAttackers = function finishCombatAttackers() {
   combatAssignments.forEach((_target, attacker) => emitGameEvent("attacks", { card: attacker }));
   const blocks = declareAutomaticBlockers();
   showDeclaredBlockers(blocks);
+  const defenders = [...new Set([...combatAssignments.values()].map(defendingSeatOf))];
   nextPhaseButton.disabled = true;
-  nextPhaseButton.textContent = "Opponent blocking…";
+  nextPhaseButton.textContent = defenders.length === 1 && defenders[0] === HUMAN_SEAT
+    ? "Blocking…"
+    : `${defenders.length === 1 ? seatLabel(defenders[0]) : "Defenders"} blocking…`;
   window.setTimeout(() => resolveCombatDamage(blocks), 760);
   return true;
 };
 
+
+/* ---------------------------------------------------------------------------
+ * Turn order and computer seats
+ *
+ * Every seat takes a full turn through all seven phases. Puzzles are built to be
+ * solved on the human's turn, so in practice the AI turns rarely come up — but
+ * when they do the table plays on around the seats in order.
+ * ------------------------------------------------------------------------- */
+
+const AI_STEP_DELAY = 850;
+let aiTurnTimer = null;
+
+function activeSeat() {
+  const seatId = window.currentTurnSeat || HUMAN_SEAT;
+  return seatExists(seatId) ? seatId : HUMAN_SEAT;
+}
+
+/** Turn order runs around the table: the human first, then each AI seat. */
+window.nextSeatInTurnOrder = function nextSeatInTurnOrder(seatId) {
+  const order = seatIds();
+  const index = order.indexOf(seatId);
+  if (index < 0) return HUMAN_SEAT;
+  return order[(index + 1) % order.length];
+};
+
+/** The turn number only ticks over when play comes back around to the human. */
+window.seatStartsNewRound = function seatStartsNewRound(_previousSeat, nextSeat) {
+  return nextSeat === HUMAN_SEAT;
+};
+
+window.seatTurnLabel = function seatTurnLabel(seatId) {
+  return seatId === HUMAN_SEAT ? "Your turn" : `${seatLabel(seatId)}'s turn`;
+};
+
+/** Lights up the turn marker on whichever seat is currently taking its turn. */
+function paintSeatTurnMarkers() {
+  const current = activeSeat();
+  seatIds().forEach((seatId) => {
+    const section = seatSection(seatId);
+    if (!section) return;
+    section.classList.toggle("seat-taking-turn", seatId === current);
+    section.querySelector(".turn-marker")?.classList.toggle("active", seatId === current);
+  });
+  const humanEyebrow = seatSection(HUMAN_SEAT)?.querySelector(".eyebrow");
+  if (humanEyebrow) humanEyebrow.textContent = current === HUMAN_SEAT ? "You · Your turn" : "You · Waiting";
+}
+
+function clearAiTurnTimer() {
+  window.clearTimeout(aiTurnTimer);
+  aiTurnTimer = null;
+}
+
+function scheduleAiStep(action, delay = AI_STEP_DELAY) {
+  clearAiTurnTimer();
+  aiTurnTimer = window.setTimeout(action, delay);
+}
+
+/** Untapped lands are the only mana an AI seat can count on. */
+function untappedLandsFor(seatId) {
+  return [...document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card`)]
+    .filter((card) => card.dataset.typeLine.includes("Land") && !card.classList.contains("tapped"));
+}
+
+/**
+ * AI seats do not use the mana pool — it belongs to the human's console — so
+ * affordability is approximated by counting untapped lands against the card's
+ * total mana value. Good enough for the boards these puzzles set up.
+ */
+function manaValueOf(cost) {
+  return parseCost(cost).reduce((total, symbol) => {
+    const generic = Number(symbol);
+    return total + (Number.isFinite(generic) ? generic : 1);
+  }, 0);
+}
+
+function aiPlaysLand(seatId) {
+  const hand = seatZone(seatId, "hand");
+  const land = [...hand.querySelectorAll(":scope > .board-card")]
+    .find((card) => card.dataset.typeLine.includes("Land"));
+  if (!land) return false;
+  seatZone(seatId, "battlefield").append(land);
+  refreshCardState(land);
+  emitGameEvent("permanent-enter", { card: land, controller: seatId });
+  showMessage(`${seatLabel(seatId)} played ${land.dataset.cardName}.`);
+  return true;
+}
+
+/** Casts whatever the seat can pay for, biggest first, tapping lands to do it. */
+function aiCastsFromHand(seatId) {
+  const hand = seatZone(seatId, "hand");
+  const battlefield = seatZone(seatId, "battlefield");
+  const castable = [...hand.querySelectorAll(":scope > .board-card")]
+    .filter((card) => !card.dataset.typeLine.includes("Land") && card.dataset.typeLine.includes("Creature"))
+    .sort((left, right) => manaValueOf(right.dataset.manaCost) - manaValueOf(left.dataset.manaCost));
+  let cast = 0;
+  castable.forEach((card) => {
+    const available = untappedLandsFor(seatId);
+    const cost = manaValueOf(card.dataset.manaCost);
+    if (!cost || cost > available.length) return;
+    available.slice(0, cost).forEach((land) => {
+      land.classList.add("tapped");
+      refreshCardState(land);
+    });
+    battlefield.append(card);
+    if (!cardHasHaste(card)) card.dataset.enteredTurn = String(window.currentTurnNumber || 1);
+    refreshCardState(card);
+    emitGameEvent("permanent-enter", { card, controller: seatId });
+    cast += 1;
+  });
+  if (cast) showMessage(`${seatLabel(seatId)} cast ${cast} creature${cast === 1 ? "" : "s"}.`);
+  return cast > 0;
+}
+
+function aiDrawsCard(seatId) {
+  const library = seatZone(seatId, "library");
+  const topCard = library.querySelector(":scope > .board-card:last-of-type");
+  if (!topCard) return false;
+  seatZone(seatId, "hand").append(topCard);
+  refreshCardState(topCard);
+  return true;
+}
+
+/** Ranks the seats this one is willing to attack, best target first. */
+function aiAttackTargets(seatId) {
+  const behavior = behaviorFor(seatId);
+  const rivals = seatsOtherThan(seatId);
+  if (behavior.attackTarget === "none" || !rivals.length) return [];
+  if (behavior.attackTarget === "player") return rivals.includes(HUMAN_SEAT) ? [HUMAN_SEAT] : rivals;
+  if (behavior.attackTarget === "random") return [rivals[Math.floor(Math.random() * rivals.length)]];
+  // "Weakest" and "strongest" score a seat by its life plus the bodies it can
+  // put in the way, so an open board reads as a softer target than a defended one.
+  const score = (rival) => seatLifeValue(rival) + blockerPoolFor(rival).length * 2;
+  const ranked = [...rivals].sort((left, right) => score(left) - score(right));
+  return behavior.attackTarget === "strongest" ? ranked.reverse() : ranked;
+}
+
+/** An attack is worth making if nothing the defender has can profitably stop it. */
+function aiAttackIsSafe(attacker, defendingSeat) {
+  return !blockerPoolFor(defendingSeat).some((blocker) => (
+    canBlockAttacker(blocker, attacker) && blockIsProfitable(attacker, blocker)
+  ));
+}
+
+function declareAiAttackers(seatId) {
+  const behavior = behaviorFor(seatId);
+  const [defendingSeat] = aiAttackTargets(seatId);
+  const eligible = [...document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card.combat-eligible`)];
+
+  if (behavior.attackWith === "none" || !defendingSeat || !eligible.length) {
+    showMessage(`${seatLabel(seatId)} did not attack.`);
+    scheduleAiStep(() => window.advancePhase());
+    return;
+  }
+
+  const target = seatLifeTotal(defendingSeat);
+  const attacking = behavior.attackWith === "profitable"
+    ? eligible.filter((attacker) => aiAttackIsSafe(attacker, defendingSeat))
+    : eligible;
+
+  if (!attacking.length) {
+    showMessage(`${seatLabel(seatId)} held its creatures back.`);
+    scheduleAiStep(() => window.advancePhase());
+    return;
+  }
+
+  attacking.forEach((attacker) => {
+    combatAssignments.set(attacker, target);
+    attacker.classList.add("declared-attacker");
+    attacker.dataset.attackTarget = combatTargetLabel(target);
+  });
+  updateCombatButton();
+  showMessage(
+    `${seatLabel(seatId)} attacks ${defendingSeat === HUMAN_SEAT ? "you" : seatLabel(defendingSeat)} with ${attacking.length} creature${attacking.length === 1 ? "" : "s"}.`,
+    "error",
+  );
+  // Hand off to the shared combat pipeline, which declares blockers for the
+  // defending seat and resolves damage, then carries the turn forward.
+  scheduleAiStep(() => {
+    if (!window.finishCombatAttackers()) window.advancePhase();
+  });
+}
+
+/** Runs the active AI seat's business for the phase it just entered. */
+function runAiPhase(seatId, phase) {
+  const behavior = behaviorFor(seatId);
+  switch (phase) {
+    case "Draw":
+      if (behavior.drawStep === "draw" && aiDrawsCard(seatId)) {
+        showMessage(`${seatLabel(seatId)} drew a card.`);
+      }
+      scheduleAiStep(() => window.advancePhase());
+      break;
+    case "Main phase 1":
+      if (behavior.mainPhase !== "pass") aiPlaysLand(seatId);
+      if (behavior.mainPhase === "landCast") aiCastsFromHand(seatId);
+      scheduleAiStep(() => window.advancePhase());
+      break;
+    case "Main phase 2":
+      // A second look, in case combat freed up mana or the first main was skipped.
+      if (behavior.mainPhase === "landCast") aiCastsFromHand(seatId);
+      scheduleAiStep(() => window.advancePhase());
+      break;
+    case "Combat phase":
+      // beginCombatDeclaration already routed this seat into declareAiAttackers.
+      break;
+    default:
+      scheduleAiStep(() => window.advancePhase());
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Behavior settings
+ *
+ * A computer seat does not improvise: the board author decides in edit mode who
+ * it attacks, what it attacks with, how it blocks, and what it does with its
+ * main phases. Those choices are what runAiPhase reads on the seat's own turn.
+ * ------------------------------------------------------------------------- */
+
+let behaviorSeatId = null;
+
+function openSeatBehavior(seatId) {
+  if (!editingMode || !seatExists(seatId)) return;
+  behaviorSeatId = seatId;
+  const behavior = behaviorFor(seatId);
+  seatBehaviorTitle.textContent = `${seatLabel(seatId)} · behavior`;
+  seatBehaviorForm.elements.label.value = seatLabel(seatId);
+  Object.entries(behavior).forEach(([field, value]) => {
+    if (seatBehaviorForm.elements[field]) seatBehaviorForm.elements[field].value = value;
+  });
+  seatBehaviorPanel.hidden = false;
+  seatBehaviorBackdrop.hidden = false;
+  window.setTimeout(() => seatBehaviorForm.elements.label.focus(), 80);
+}
+
+function closeSeatBehavior() {
+  behaviorSeatId = null;
+  seatBehaviorPanel.hidden = true;
+  seatBehaviorBackdrop.hidden = true;
+}
+
+/** Settings apply as they are changed — there is nothing to submit. */
+function saveSeatBehaviorFromForm() {
+  if (!behaviorSeatId) return;
+  const behavior = behaviorFor(behaviorSeatId);
+  Object.keys(DEFAULT_SEAT_BEHAVIOR).forEach((field) => {
+    const control = seatBehaviorForm.elements[field];
+    if (control) behavior[field] = control.value;
+  });
+  // An empty name falls back to the seat's positional default.
+  behavior.label = seatBehaviorForm.elements.label.value.trim();
+  refreshSeatLabels();
+  seatBehaviorTitle.textContent = `${seatLabel(behaviorSeatId)} · behavior`;
+}
 
 function openImporter() {
   if (!editingMode) return;
@@ -1948,10 +2606,11 @@ function setEditingMode(enabled) {
   saveManagerTrigger.disabled = !enabled;
   clearBoardButton.disabled = !enabled;
   importer.editBanner.hidden = !enabled;
-  lifeInputs.forEach((input) => {
+  syncSeatControls();
+  allLifeInputs().forEach((input) => {
     input.disabled = !enabled;
   });
-  lifeAdjustButtons.forEach((button) => {
+  allLifeAdjustButtons().forEach((button) => {
     button.disabled = !enabled;
   });
   document.querySelectorAll(".board-card").forEach(refreshCardState);
@@ -1960,6 +2619,7 @@ function setEditingMode(enabled) {
     cancelPlacement();
     if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
     closeSaveManager();
+    closeSeatBehavior();
   }
 }
 
@@ -1984,14 +2644,31 @@ function serializeBoardCard(card) {
   };
 }
 
+/**
+ * Life and counters are keyed by seat rather than by position so a save survives
+ * seats being added or removed. `life` and `counters` are still written as flat
+ * arrays for saves made before multiplayer, which loadBoardState falls back to.
+ */
 function captureBoardState() {
   return {
     savedAt: new Date().toISOString(),
     phase: window.currentTurnPhase || "Untap",
     turnNumber: window.currentTurnNumber || 1,
-    life: lifeInputs.map((input) => input.value),
-    counters: playerCounterElements.map((counter) => Number(counter.dataset.value || 0)),
-    zones: Object.fromEntries(zones.map((zone) => [
+    turnSeat: activeSeat(),
+    aiSeats: aiSeatIds(),
+    seats: Object.fromEntries(seatIds().map((seatId) => {
+      const section = seatSection(seatId);
+      return [seatId, {
+        label: seatLabel(seatId),
+        life: section?.querySelector(".life-input")?.value ?? "20",
+        counters: Object.fromEntries([...section.querySelectorAll(".player-counter")]
+          .map((counter) => [counter.dataset.counter, Number(counter.dataset.value || 0)])),
+        behavior: isAiSeat(seatId) ? { ...behaviorFor(seatId) } : null,
+      }];
+    })),
+    life: allLifeInputs().map((input) => input.value),
+    counters: allPlayerCounters().map((counter) => Number(counter.dataset.value || 0)),
+    zones: Object.fromEntries(allZones().map((zone) => [
       zone.dataset.zone,
       [...zone.querySelectorAll(":scope > .board-card")].map(serializeBoardCard),
     ])),
@@ -2016,16 +2693,34 @@ function savedCardToScryfall(record) {
 
 function loadBoardState(state) {
   closeManaChoicePrompt();
+  clearAiTurnTimer();
   document.querySelectorAll(".board-card").forEach((card) => card.remove());
-  lifeInputs.forEach((input, index) => {
-    input.value = state.life?.[index] ?? "20";
-  });
-  playerCounterElements.forEach((counter, index) => {
-    const value = Number(state.counters?.[index] || 0);
-    counter.dataset.value = String(value);
-    counter.textContent = `${counter.dataset.counter === "poison" ? "Poison" : "Experience"} ${value}`;
-    counter.hidden = value === 0;
-  });
+  restoreSeatsFromState(state);
+  if (state.seats) {
+    Object.entries(state.seats).forEach(([seatId, saved]) => {
+      const section = seatSection(seatId);
+      if (!section) return;
+      section.querySelector(".life-input").value = saved.life ?? "20";
+      section.querySelectorAll(".player-counter").forEach((counter) => {
+        const value = Number(saved.counters?.[counter.dataset.counter] || 0);
+        counter.dataset.value = String(value);
+        counter.textContent = `${counter.dataset.counter === "poison" ? "Poison" : "Experience"} ${value}`;
+        counter.hidden = value === 0;
+      });
+      if (saved.behavior) seatBehaviors.set(seatId, { ...DEFAULT_SEAT_BEHAVIOR, ...saved.behavior });
+    });
+  } else {
+    // A save from before multiplayer: two seats, flat arrays, positional order.
+    allLifeInputs().forEach((input, index) => {
+      input.value = state.life?.[index] ?? "20";
+    });
+    allPlayerCounters().forEach((counter, index) => {
+      const value = Number(state.counters?.[index] || 0);
+      counter.dataset.value = String(value);
+      counter.textContent = `${counter.dataset.counter === "poison" ? "Poison" : "Experience"} ${value}`;
+      counter.hidden = value === 0;
+    });
+  }
   Object.entries(state.zones || {}).forEach(([zoneName, records]) => {
     const zone = document.querySelector(`[data-zone="${zoneName}"]`);
     if (!zone) return;
@@ -2038,7 +2733,10 @@ function loadBoardState(state) {
       updateCreatureDamageBadge(card);
     });
   });
-  window.setTurnState?.(state.phase || "Untap", state.turnNumber || 1);
+  refreshSeatLabels();
+  syncSeatControls();
+  const savedSeat = state.turnSeat && seatExists(state.turnSeat) ? state.turnSeat : HUMAN_SEAT;
+  window.setTurnState?.(state.phase || "Untap", state.turnNumber || 1, savedSeat);
   showMessage("Board save loaded.", "success");
 }
 
@@ -2121,8 +2819,8 @@ function clearCurrentBoard() {
   window.clearTimeout(clearBoardTimer);
   clearBoardArmed = false;
   document.querySelectorAll(".board-card").forEach((card) => card.remove());
-  lifeInputs.forEach((input) => { input.value = "20"; });
-  playerCounterElements.forEach((counter) => {
+  allLifeInputs().forEach((input) => { input.value = "20"; });
+  allPlayerCounters().forEach((counter) => {
     counter.dataset.value = "0";
     counter.hidden = true;
   });
@@ -2133,7 +2831,7 @@ function clearCurrentBoard() {
 function cancelPlacement() {
   selectedCard = null;
   importer.toast.hidden = true;
-  zones.forEach((zone) => zone.classList.remove("placement-target"));
+  allZones().forEach((zone) => zone.classList.remove("placement-target"));
 }
 
 function beginPlacement(card) {
@@ -2142,7 +2840,7 @@ function beginPlacement(card) {
   importer.toastImage.alt = card.name;
   importer.toast.querySelector("span").textContent = `Place ${card.name} in any highlighted zone`;
   importer.toast.hidden = false;
-  zones.forEach((zone) => zone.classList.add("placement-target"));
+  allZones().forEach((zone) => zone.classList.add("placement-target"));
   closeImporter();
 }
 
@@ -2192,7 +2890,7 @@ function effectiveSpellCost(card, printedCost) {
 
 function effectiveActivatedAbilityCost(sourceCard, printedCost) {
   let cost = printedCost;
-  const controller = sourceCard.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  const controller = seatOfElement(sourceCard);
   document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`).forEach((source) => {
     staticAbilityLines(source).forEach((line) => {
       const match = line.match(/^(?:Activated\s+)?abilities(?: of (.+?))? you (?:activate|control) cost ((?:\{[^}]+\})+) less to activate/i);
@@ -2228,7 +2926,7 @@ function permanentCostRequirement(cost, source) {
   const rawKind = match[5].toLowerCase();
   const kind = ({ creatures: "creature", artifacts: "artifact", lands: "land", permanents: "permanent", elves: "elf" })[rawKind]
     || rawKind.replace(/s$/, "");
-  const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  const controller = seatOfElement(source);
   const candidates = [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)].filter((card) => {
     if (excludesSource && card === source) return false;
     if (kind !== "permanent" && !card.dataset.typeLine.toLowerCase().includes(kind)) return false;
@@ -2262,8 +2960,8 @@ function payActivatedAbilityCost(source, printedCost, selectedPermanents = []) {
     .replace(/[,.\s]/g, "");
   if (unsupported) return { paid: false, reason: `This ability uses an unsupported cost: ${printedCost}.` };
 
-  const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
-  const lifeInput = document.querySelector(`.${controller} .life-input`);
+  const controller = seatOfElement(source);
+  const lifeInput = seatSection(controller)?.querySelector(".life-input");
   const lifePayment = Number(lifeMatch?.[1] || 0);
   if (lifePayment && Number(lifeInput.value) < lifePayment) return { paid: false, reason: `You cannot pay ${lifePayment} life.` };
 
@@ -2403,7 +3101,7 @@ function restingZoneFor(card, owner) {
 function movePermanentToGraveyard(card, { reason = "died", announce = false } = {}) {
   if (card.classList.contains("moving-to-graveyard")) return;
   const battlefieldZone = card.parentElement?.dataset.zone || "";
-  const owner = battlefieldZone.startsWith("opponent-") ? "opponent" : "player";
+  const owner = seatOfElement(card);
   const died = battlefieldZone.endsWith("-battlefield") && card.dataset.typeLine.includes("Creature");
   const isToken = card.dataset.isToken === "true";
   card.classList.add("moving-to-graveyard");
@@ -2868,10 +3566,10 @@ function resolveTriggeredAbility() {
   }
   const { source, effect } = activeTrigger;
   let { targets } = activeTrigger;
-  const controller = source.parentElement?.dataset.zone?.startsWith("opponent-") ? "opponent" : "player";
+  const controller = seatOfElement(source);
   const damage = fixedDamageAmount(effect);
   if (damage && !targets.length && /\b(each opponent|defending player)\b/i.test(effect)) {
-    targets = [document.querySelector(`.${controller === "player" ? "opponent" : "player"} .life-total`)];
+    targets = seatsOtherThan(controller).map(seatLifeTotal).filter(Boolean);
   }
   if (damage && !targets.length && /\b(player or planeswalker) that (?:creature|it) is attacking\b/i.test(effect)) {
     const attackedTarget = combatAssignments.get(activeTrigger.context.card);
@@ -2888,7 +3586,7 @@ function resolveTriggeredAbility() {
   }
   const lifeGain = effect.match(/\bgain(?:s)?\s+(\d+)\s+life\b/i);
   if (lifeGain) {
-    const life = document.querySelector(`.${controller} .life-input`);
+    const life = seatSection(controller)?.querySelector(".life-input");
     life.value = String(Math.min(999, Number(life.value || 0) + Number(lifeGain[1])));
   }
   const draw = effect.match(/\bdraw\s+(a|one|two|three|four|five|\d+)\s+cards?\b/i);
@@ -3550,7 +4248,7 @@ function createBoardCard(card) {
   element.addEventListener("dragend", () => {
     draggedCard = null;
     element.classList.remove("dragging");
-    zones.forEach((zone) => zone.classList.remove("drag-over"));
+    allZones().forEach((zone) => zone.classList.remove("drag-over"));
     clearCastDropTargets();
   });
   refreshCardState(element);
@@ -3631,12 +4329,17 @@ document.addEventListener("turn:untap", () => {
 document.addEventListener("team:spellcast", recordAlliedSpellCast);
 document.addEventListener("turn:phasechange", (event) => {
   closeManaChoicePrompt();
+  clearAiTurnTimer();
+  paintSeatTurnMarkers();
   emitGameEvent("phase", { phase: event.detail.phase });
   if (event.detail.phase === "End step") resolveEndStepDelayedEffects();
   if (event.detail.phase === "Combat phase") beginCombatDeclaration();
   else {
     cleanupCombat();
   }
+  // A computer seat plays its own turn out; the human drives their own.
+  const seatId = activeSeat();
+  if (isAiSeat(seatId) && !editingMode) runAiPhase(seatId, event.detail.phase);
 });
 resolveSpellButton.addEventListener("click", resolveActiveSpell);
 resolveTriggerButton.addEventListener("click", resolveTriggeredAbility);
@@ -3697,20 +4400,20 @@ cancelPermanentCostButton.addEventListener("click", () => {
   closeActivatedAbilityMenu();
 });
 
-lifeAdjustButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    if (!editingMode) return;
-    const input = button.parentElement.querySelector(".life-input");
-    const nextValue = Math.max(0, Math.min(999, Number(input.value || 0) + Number(button.dataset.delta)));
-    input.value = String(nextValue);
-  });
+// Delegated, so seats added during editing get working life controls for free.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(".life-adjust");
+  if (!button || !editingMode) return;
+  const input = button.parentElement.querySelector(".life-input");
+  const nextValue = Math.max(0, Math.min(999, Number(input.value || 0) + Number(button.dataset.delta)));
+  input.value = String(nextValue);
 });
 
-lifeInputs.forEach((input) => {
-  input.addEventListener("change", () => {
-    const value = Number(input.value);
-    input.value = String(Number.isFinite(value) ? Math.max(0, Math.min(999, Math.round(value))) : 0);
-  });
+document.addEventListener("change", (event) => {
+  const input = event.target.closest(".life-input");
+  if (!input) return;
+  const value = Number(input.value);
+  input.value = String(Number.isFinite(value) ? Math.max(0, Math.min(999, Math.round(value))) : 0);
 });
 
 document.addEventListener("keydown", (event) => {
@@ -3739,6 +4442,10 @@ document.addEventListener("keydown", (event) => {
     closeGraveyardViewer();
     return;
   }
+  if (!seatBehaviorPanel.hidden) {
+    closeSeatBehavior();
+    return;
+  }
   if (selectedCard) cancelPlacement();
   else if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
 });
@@ -3754,6 +4461,7 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const attacker = event.target.closest('[data-zone="player-battlefield"] .combat-eligible');
   if (!attacker || editingMode || window.currentTurnPhase !== "Combat phase") return;
+  if (activeSeat() !== HUMAN_SEAT) return;
   event.preventDefault();
   if (combatAssignments.has(attacker)) {
     combatAssignments.delete(attacker);
@@ -3787,76 +4495,40 @@ document.addEventListener("drop", (event) => {
   castCardByDrop(card, target);
 }, true);
 
-zones.forEach((zone) => {
-  zone.addEventListener("click", (event) => {
-    if (event.target.closest("button")) return;
-    if (event.target.closest(".board-card") && !selectedCard) return;
-    if (selectedPermanent && zone.dataset.zone === "player-battlefield") {
-      resolvePermanent(selectedPermanent, zone);
-      return;
-    }
-    placeSelectedCard(zone);
-  });
-  zone.addEventListener("keydown", (event) => {
-    if ((event.key === "Enter" || event.key === " ") && selectedCard) {
-      event.preventDefault();
-      placeSelectedCard(zone);
-    }
-  });
-  zone.addEventListener("dragover", (event) => {
-    const resolvingPermanent = draggedCard?.classList.contains("awaiting-placement");
-    const validResolution = resolvingPermanent && zone.dataset.zone === "player-battlefield";
-    if (!draggedCard || (!editingMode && !validResolution)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    zone.classList.add("drag-over");
-  });
-  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
-  zone.addEventListener("drop", (event) => {
-    const resolvingPermanent = draggedCard?.classList.contains("awaiting-placement");
-    const validResolution = resolvingPermanent && zone.dataset.zone === "player-battlefield";
-    if (!editingMode && !validResolution) return;
-    event.preventDefault();
-    zone.classList.remove("drag-over");
-    if (draggedCard) {
-      const resolvedCard = draggedCard;
-      const fromZone = resolvedCard.parentElement?.dataset.zone;
-      zone.append(resolvedCard);
-      if (fromZone === "player-hand" && zone.dataset.zone === "player-graveyard") {
-        resolvedCard.dataset.discardedTurn = String(window.currentTurnNumber || 1);
-      }
-      if (resolvingPermanent) {
-        resolvePermanent(resolvedCard, zone);
-      } else {
-        refreshCardState(resolvedCard);
-      }
-    }
-  });
+// A board always opens against a single opponent; more seats are added in edit
+// mode. Build it before the sweep below so its zones are wired like any other.
+buildSeat(AI_SEAT_IDS[0]);
+paintSeatTurnMarkers();
+
+// Every zone on the board wires itself the same way, human seat or not.
+allZones().forEach(registerZone);
+
+addSeatButton.addEventListener("click", addSeat);
+closeSeatBehaviorButton.addEventListener("click", closeSeatBehavior);
+seatBehaviorBackdrop.addEventListener("click", closeSeatBehavior);
+seatBehaviorForm.addEventListener("input", saveSeatBehaviorFromForm);
+seatBehaviorForm.addEventListener("change", saveSeatBehaviorFromForm);
+seatBehaviorForm.addEventListener("submit", (event) => event.preventDefault());
+
+// Seat controls are rebuilt with each seat, so delegate from the board.
+gameBoard.addEventListener("click", (event) => {
+  const seatId = event.target.closest(".ai-seat")?.dataset.seat;
+  if (!seatId) return;
+  if (event.target.closest(".seat-behavior")) {
+    event.stopPropagation();
+    openSeatBehavior(seatId);
+  }
+  if (event.target.closest(".seat-remove")) {
+    event.stopPropagation();
+    removeSeat(seatId);
+  }
 });
 
-graveyardZones.forEach((zone) => {
-  zone.querySelector(".view-graveyard").addEventListener("click", (event) => {
-    event.stopPropagation();
-    openGraveyardViewer(zone);
-  });
-  new MutationObserver(updateGraveyardDisplays).observe(zone, { childList: true });
-});
-exileZones.forEach((zone) => {
-  new MutationObserver(updateExileDisplays).observe(zone, { childList: true });
-});
 closeGraveyardViewerButton.addEventListener("click", closeGraveyardViewer);
 graveyardViewerBackdrop.addEventListener("click", closeGraveyardViewer);
 updateGraveyardDisplays();
 updateExileDisplays();
 
-const staticAbilityObserver = new MutationObserver(() => {
-  recalculateStaticAbilities();
-  validateManaChoicePrompt();
-});
-document.querySelectorAll('[data-zone$="battlefield"]').forEach((battlefield) => {
-  staticAbilityObserver.observe(battlefield, { childList: true });
-  new MutationObserver(arrangeLandStacks).observe(battlefield, { childList: true });
-});
 arrangeLandStacks();
 recalculateStaticAbilities();
 

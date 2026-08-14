@@ -5,60 +5,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=71" />
+    <link rel="stylesheet" href="styles.css?v=72" />
   </head>
   <body>
-    <main class="game-board" aria-label="Magic puzzle board">
-      <section class="player-side opponent" aria-labelledby="opponent-name">
-        <header class="player-bar">
-          <div class="player-identity">
-            <span class="turn-marker" aria-hidden="true"></span>
-            <div>
-              <p class="eyebrow">Opponent</p>
-              <h1 id="opponent-name">Enemy Planeswalker</h1>
+    <main class="game-board" data-seat-count="2" aria-label="Magic puzzle board">
+      <template id="ai-seat-template">
+        <section class="player-side opponent ai-seat" data-seat="__SEAT__" aria-labelledby="__SEAT__-name">
+          <header class="player-bar">
+            <div class="player-identity">
+              <span class="turn-marker" aria-hidden="true"></span>
+              <div>
+                <p class="eyebrow">Opponent</p>
+                <h2 class="seat-name" id="__SEAT__-name">__LABEL__</h2>
+              </div>
+              <div class="player-counters" aria-label="__LABEL__ counters">
+                <span class="player-counter poison-counter" data-counter="poison" data-value="0" hidden>Poison 0</span>
+                <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
+              </div>
             </div>
-            <div class="player-counters" aria-label="Opponent counters">
-              <span class="player-counter poison-counter" data-counter="poison" data-value="0" hidden>Poison 0</span>
-              <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
+            <div class="seat-edit-actions">
+              <button class="seat-behavior" type="button" aria-haspopup="dialog"><span aria-hidden="true">⚙</span> Behavior</button>
+              <button class="seat-remove" type="button" aria-label="Remove __LABEL__">✕</button>
+            </div>
+            <div class="life-total" aria-label="__LABEL__ life total">
+              <span>HP</span>
+              <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease __LABEL__ HP" disabled>−</button>
+              <input class="life-input" type="number" value="20" min="0" max="999" aria-label="__LABEL__ HP" disabled />
+              <button class="life-adjust" type="button" data-delta="1" aria-label="Increase __LABEL__ HP" disabled>+</button>
+            </div>
+          </header>
+
+          <div class="hand-zone drop-zone" data-zone="__SEAT__-hand" aria-label="__LABEL__ hand" tabindex="0">
+            <span class="zone-label">__LABEL__ hand</span>
+          </div>
+
+          <div class="play-area">
+            <aside class="card-piles" aria-label="__LABEL__ card piles">
+              <div class="zone card-zone graveyard-zone drop-zone" data-zone="__SEAT__-graveyard" tabindex="0">
+                <span class="zone-count">0</span>
+                <span class="zone-label">Graveyard</span>
+                <button class="view-graveyard" type="button" hidden>View graveyard</button>
+              </div>
+              <div class="zone card-zone exile-zone drop-zone" data-zone="__SEAT__-exile" tabindex="0">
+                <span class="zone-count">0</span>
+                <span class="zone-label">Exile</span>
+              </div>
+              <div class="zone card-zone library drop-zone" data-zone="__SEAT__-library" tabindex="0">
+                <span class="zone-count">40</span>
+                <span class="zone-label">Library</span>
+              </div>
+            </aside>
+            <div class="battlefield-shell">
+              <span class="battlefield-heading">__LABEL__ battlefield</span>
+              <div class="battlefield-zone drop-zone" data-zone="__SEAT__-battlefield" tabindex="0"></div>
             </div>
           </div>
-          <div class="life-total" aria-label="Opponent life total">
-            <span>HP</span>
-            <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease opponent HP" disabled>−</button>
-            <input class="life-input" type="number" value="20" min="0" max="999" aria-label="Opponent HP" disabled />
-            <button class="life-adjust" type="button" data-delta="1" aria-label="Increase opponent HP" disabled>+</button>
-          </div>
-        </header>
 
-        <div class="hand-zone drop-zone" data-zone="opponent-hand" aria-label="Opponent hand" tabindex="0">
-          <span class="zone-label">Opponent hand</span>
-        </div>
-
-        <div class="play-area">
-          <aside class="card-piles" aria-label="Opponent card piles">
-            <div class="zone card-zone drop-zone" data-zone="opponent-graveyard" tabindex="0">
-              <span class="zone-count">0</span>
-              <span class="zone-label">Graveyard</span>
-              <button class="view-graveyard" type="button" hidden>View graveyard</button>
-            </div>
-            <div class="zone card-zone exile-zone drop-zone" data-zone="opponent-exile" tabindex="0">
-              <span class="zone-count">0</span>
-              <span class="zone-label">Exile</span>
-            </div>
-            <div class="zone card-zone library drop-zone" data-zone="opponent-library" tabindex="0">
-              <span class="zone-count">40</span>
-              <span class="zone-label">Library</span>
-            </div>
-          </aside>
-          <div class="battlefield-shell">
-            <span class="battlefield-heading">Enemy battlefield</span>
-            <div class="battlefield-zone drop-zone" data-zone="opponent-battlefield" tabindex="0"></div>
-          </div>
-        </div>
-
-      </section>
+        </section>
+      </template>
 
       <nav class="turn-divider" aria-label="Turn phases">
+        <p class="active-seat-banner"><span class="active-seat-label">Your turn</span> · Turn <span class="active-turn-number">1</span></p>
         <ol class="phase-list">
           <li class="phase-step active" aria-current="step">Untap</li>
           <li class="phase-step">Upkeep</li>
@@ -71,7 +78,7 @@
         <button class="next-phase" type="button">Next phase <span aria-hidden="true">→</span></button>
       </nav>
 
-      <section class="player-side player" aria-labelledby="player-name">
+      <section class="player-side player" data-seat="player" aria-labelledby="player-name">
         <div class="play-area">
           <div class="battlefield-shell">
             <span class="battlefield-heading">Your battlefield</span>
@@ -82,7 +89,7 @@
               <span class="zone-count">40</span>
               <span class="zone-label">Library</span>
             </div>
-            <div class="zone card-zone drop-zone" data-zone="player-graveyard" tabindex="0">
+            <div class="zone card-zone graveyard-zone drop-zone" data-zone="player-graveyard" tabindex="0">
               <span class="zone-count">0</span>
               <span class="zone-label">Graveyard</span>
               <button class="view-graveyard" type="button" hidden>View graveyard</button>
@@ -103,7 +110,7 @@
             <span class="turn-marker active" aria-hidden="true"></span>
             <div>
               <p class="eyebrow">You · Your turn</p>
-              <h2 id="player-name">Player Planeswalker</h2>
+              <h1 id="player-name">Player Planeswalker</h1>
             </div>
             <div class="player-counters" aria-label="Your counters">
               <span class="player-counter poison-counter" data-counter="poison" data-value="0" hidden>Poison 0</span>
@@ -128,6 +135,7 @@
     <div class="edit-controls">
       <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
       <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
+      <button class="add-seat" type="button" disabled><span aria-hidden="true">👤</span> Add opponent</button>
       <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
       <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
     </div>
@@ -151,6 +159,66 @@
       <div class="search-status" role="status">Search Scryfall, then choose a card.</div>
       <div class="search-results" aria-label="Card search results"></div>
       <footer class="drawer-footer">Card data and images provided by <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a>.</footer>
+    </aside>
+
+    <div class="seat-behavior-backdrop" hidden></div>
+    <aside class="seat-behavior-panel" role="dialog" aria-modal="true" aria-labelledby="seat-behavior-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Computer control</p>
+          <h2 id="seat-behavior-title">Opponent behavior</h2>
+        </div>
+        <button class="close-seat-behavior" type="button" aria-label="Close behavior settings">×</button>
+      </header>
+      <p class="seat-behavior-copy">These rules run on this opponent's own turn, and decide how it blocks on everyone else's.</p>
+      <form class="seat-behavior-form">
+        <label class="behavior-field">
+          <span>Name</span>
+          <input type="text" name="label" maxlength="28" autocomplete="off" />
+        </label>
+        <label class="behavior-field">
+          <span>Attacks</span>
+          <select name="attackTarget">
+            <option value="weakest">Whoever is weakest</option>
+            <option value="strongest">Whoever is strongest</option>
+            <option value="player">You</option>
+            <option value="random">A random opponent</option>
+            <option value="none">Never attacks</option>
+          </select>
+        </label>
+        <label class="behavior-field">
+          <span>Attacks with</span>
+          <select name="attackWith">
+            <option value="all">Every creature that can</option>
+            <option value="profitable">Only when the attack is good</option>
+            <option value="none">Nothing</option>
+          </select>
+        </label>
+        <label class="behavior-field">
+          <span>Blocks</span>
+          <select name="blockStyle">
+            <option value="best">Best available trade</option>
+            <option value="profitable">Only profitable blocks</option>
+            <option value="chump">Chump blocks the biggest attacker</option>
+            <option value="never">Never blocks</option>
+          </select>
+        </label>
+        <label class="behavior-field">
+          <span>Main phase</span>
+          <select name="mainPhase">
+            <option value="pass">Does nothing</option>
+            <option value="land">Plays a land</option>
+            <option value="landCast">Plays a land and casts what it can</option>
+          </select>
+        </label>
+        <label class="behavior-field">
+          <span>Draw step</span>
+          <select name="drawStep">
+            <option value="draw">Draws a card</option>
+            <option value="skip">Skips its draw</option>
+          </select>
+        </label>
+      </form>
     </aside>
 
     <div class="save-manager-backdrop" hidden></div>
@@ -230,16 +298,22 @@
       </div>
     </aside>
 
-    <script src="app.js?v=71" defer></script>
+    <script src="app.js?v=72" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
+      const activeSeatLabel = document.querySelector(".active-seat-label");
+      const activeTurnNumberLabel = document.querySelector(".active-turn-number");
       let activePhaseIndex = 0;
       let activeTurnNumber = 1;
+      // The seat whose turn it is. app.js owns the seat roster and swaps this as
+      // the turn passes; before it loads there is only ever the human seat.
+      let activeSeatId = "player";
 
       function paintActivePhase() {
         window.currentTurnPhase = turnPhases[activePhaseIndex];
         window.currentTurnNumber = activeTurnNumber;
+        window.currentTurnSeat = activeSeatId;
         turnPhaseSteps.forEach((step, index) => {
           const active = index === activePhaseIndex;
           step.classList.toggle("active", active);
@@ -250,32 +324,48 @@
             requestAnimationFrame(() => step.classList.add("phase-enter"));
           }
         });
-        document.dispatchEvent(new CustomEvent("turn:phasechange", { detail: { phase: window.currentTurnPhase } }));
+        activeSeatLabel.textContent = window.seatTurnLabel?.(activeSeatId) || "Your turn";
+        activeTurnNumberLabel.textContent = String(activeTurnNumber);
+        document.dispatchEvent(new CustomEvent("turn:phasechange", {
+          detail: { phase: window.currentTurnPhase, seat: activeSeatId },
+        }));
       }
 
-      window.setTurnState = (phase, turnNumber = 1) => {
+      window.setTurnState = (phase, turnNumber = 1, seat = "player") => {
         const phaseIndex = turnPhases.indexOf(phase);
         if (phaseIndex < 0) return;
         activePhaseIndex = phaseIndex;
         activeTurnNumber = Math.max(1, Number(turnNumber) || 1);
+        activeSeatId = seat;
         paintActivePhase();
       };
 
-      document.querySelector(".next-phase").addEventListener("click", () => {
+      window.repaintTurnState = paintActivePhase;
+
+      window.advancePhase = () => {
         if (window.currentTurnPhase === "Combat phase" && window.finishCombatAttackers?.()) return;
         document.querySelector(".clear-mana")?.click();
         activePhaseIndex = (activePhaseIndex + 1) % turnPhases.length;
+        // Wrapping past the end step passes the turn to the next seat in order.
         if (activePhaseIndex === 0) {
-          activeTurnNumber += 1;
+          const previousSeat = activeSeatId;
+          activeSeatId = window.nextSeatInTurnOrder?.(activeSeatId) || "player";
+          // A full lap of the table is one more turn number.
+          if (window.seatStartsNewRound?.(previousSeat, activeSeatId) ?? true) {
+            activeTurnNumber += 1;
+          }
           window.currentTurnNumber = activeTurnNumber;
-          document.dispatchEvent(new CustomEvent("turn:untap"));
+          window.currentTurnSeat = activeSeatId;
+          document.dispatchEvent(new CustomEvent("turn:untap", { detail: { seat: activeSeatId } }));
         }
         paintActivePhase();
         const status = document.querySelector(".game-message");
         status.textContent = `Advanced to ${turnPhases[activePhaseIndex]}.`;
         status.dataset.tone = "success";
         status.hidden = false;
-      });
+      };
+
+      document.querySelector(".next-phase").addEventListener("click", () => window.advancePhase());
 
       paintActivePhase();
     </script>
