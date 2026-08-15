@@ -1,0 +1,236 @@
+{
+  "id": "2026-08-15-test-game-1",
+  "title": "Test game 1",
+  "date": "2026-08-15",
+  "notes": "goblin",
+  "state": {
+    "savedAt": "2026-08-15T07:18:02.436Z",
+    "phase": "Untap",
+    "turnNumber": 1,
+    "turnSeat": "player",
+    "aiSeats": [
+      "opponent"
+    ],
+    "seats": {
+      "player": {
+        "label": "You",
+        "life": "20",
+        "counters": {
+          "poison": 0,
+          "experience": 0
+        },
+        "behavior": null
+      },
+      "opponent": {
+        "label": "Your Opponent",
+        "life": "20",
+        "counters": {
+          "poison": 0,
+          "experience": 0
+        },
+        "behavior": {
+          "label": "",
+          "attackTarget": "weakest",
+          "attackWith": "all",
+          "blockStyle": "best",
+          "mainPhase": "pass",
+          "drawStep": "draw"
+        }
+      }
+    },
+    "life": [
+      "20",
+      "20"
+    ],
+    "counters": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "zones": {
+      "opponent-hand": [],
+      "opponent-graveyard": [],
+      "opponent-exile": [],
+      "opponent-library": [],
+      "opponent-battlefield": [],
+      "player-battlefield": [
+        {
+          "data": {
+            "cardId": "2a844b96-6616-4c39-8f4f-5d14a3b2bd55",
+            "cardName": "Mountain",
+            "manaCost": "",
+            "typeLine": "Basic Land — Mountain",
+            "producedMana": "[\"R\"]",
+            "oracleText": "({T}: Add {R}.)",
+            "keywords": "[]",
+            "baseToughness": "",
+            "basePower": "",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "currentPower": "",
+            "currentToughness": "",
+            "grantedKeywords": "[]"
+          },
+          "image": "https://cards.scryfall.io/normal/front/2/a/2a844b96-6616-4c39-8f4f-5d14a3b2bd55.jpg?1785981666",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "2a844b96-6616-4c39-8f4f-5d14a3b2bd55",
+            "cardName": "Mountain",
+            "manaCost": "",
+            "typeLine": "Basic Land — Mountain",
+            "producedMana": "[\"R\"]",
+            "oracleText": "({T}: Add {R}.)",
+            "keywords": "[]",
+            "baseToughness": "",
+            "basePower": "",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "currentPower": "",
+            "currentToughness": "",
+            "grantedKeywords": "[]"
+          },
+          "image": "https://cards.scryfall.io/normal/front/2/a/2a844b96-6616-4c39-8f4f-5d14a3b2bd55.jpg?1785981666",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "2a844b96-6616-4c39-8f4f-5d14a3b2bd55",
+            "cardName": "Mountain",
+            "manaCost": "",
+            "typeLine": "Basic Land — Mountain",
+            "producedMana": "[\"R\"]",
+            "oracleText": "({T}: Add {R}.)",
+            "keywords": "[]",
+            "baseToughness": "",
+            "basePower": "",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "currentPower": "",
+            "currentToughness": "",
+            "grantedKeywords": "[]"
+          },
+          "image": "https://cards.scryfall.io/normal/front/2/a/2a844b96-6616-4c39-8f4f-5d14a3b2bd55.jpg?1785981666",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "e262f55e-9239-4a97-a19e-9b08fb34502e",
+            "cardName": "Goblin Bombardment",
+            "manaCost": "{1}{R}",
+            "typeLine": "Enchantment",
+            "producedMana": "[]",
+            "oracleText": "Sacrifice a creature: This enchantment deals 1 damage to any target.",
+            "keywords": "[]",
+            "baseToughness": "",
+            "basePower": "",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "currentPower": "",
+            "currentToughness": "",
+            "grantedKeywords": "[]"
+          },
+          "image": "https://cards.scryfall.io/normal/front/e/2/e262f55e-9239-4a97-a19e-9b08fb34502e.jpg?1783926784",
+          "classes": []
+        }
+      ],
+      "player-library": [],
+      "player-graveyard": [],
+      "player-exile": [],
+      "player-hand": [
+        {
+          "data": {
+            "cardId": "0405b1b9-976a-4aaf-bec6-fa006decea74",
+            "cardName": "Reckless Bushwhacker",
+            "manaCost": "{2}{R}",
+            "typeLine": "Creature — Goblin Warrior Ally",
+            "producedMana": "[]",
+            "oracleText": "Surge {1}{R} (You may cast this spell for its surge cost if you or a teammate has cast another spell this turn.)\nHaste\nWhen this creature enters, if its surge cost was paid, other creatures you control get +1/+0 and gain haste until end of turn.",
+            "keywords": "[\"Haste\",\"Surge\"]",
+            "baseToughness": "1",
+            "basePower": "2",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "effectiveManaCost": "{2}{R}"
+          },
+          "image": "https://cards.scryfall.io/normal/front/0/4/0405b1b9-976a-4aaf-bec6-fa006decea74.jpg?1783937905",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "4ebce261-3a53-48f2-a173-0d98c68aff2c",
+            "cardName": "Mogg War Marshal",
+            "manaCost": "{1}{R}",
+            "typeLine": "Creature — Goblin Warrior",
+            "producedMana": "[]",
+            "oracleText": "Echo {1}{R} (At the beginning of your upkeep, if this came under your control since the beginning of your last upkeep, sacrifice it unless you pay its echo cost.)\nWhen this creature enters or dies, create a 1/1 red Goblin creature token.",
+            "keywords": "[\"Echo\"]",
+            "baseToughness": "1",
+            "basePower": "1",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "effectiveManaCost": "{1}{R}"
+          },
+          "image": "https://cards.scryfall.io/normal/front/4/e/4ebce261-3a53-48f2-a173-0d98c68aff2c.jpg?1783903460",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "2a844b96-6616-4c39-8f4f-5d14a3b2bd55",
+            "cardName": "Mountain",
+            "manaCost": "",
+            "typeLine": "Basic Land — Mountain",
+            "producedMana": "[\"R\"]",
+            "oracleText": "({T}: Add {R}.)",
+            "keywords": "[]",
+            "baseToughness": "",
+            "basePower": "",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "effectiveManaCost": ""
+          },
+          "image": "https://cards.scryfall.io/normal/front/2/a/2a844b96-6616-4c39-8f4f-5d14a3b2bd55.jpg?1785981666",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "4085a5bf-a71b-4c73-9b39-0dcc328fe11b",
+            "cardName": "Goblin Bushwhacker",
+            "manaCost": "{R}",
+            "typeLine": "Creature — Goblin Warrior",
+            "producedMana": "[]",
+            "oracleText": "Kicker {R} (You may pay an additional {R} as you cast this spell.)\nWhen this creature enters, if it was kicked, creatures you control get +1/+0 and gain haste until end of turn.",
+            "keywords": "[\"Kicker\"]",
+            "baseToughness": "1",
+            "basePower": "1",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "effectiveManaCost": "{R}"
+          },
+          "image": "https://cards.scryfall.io/normal/front/4/0/4085a5bf-a71b-4c73-9b39-0dcc328fe11b.jpg?1783942145",
+          "classes": []
+        },
+        {
+          "data": {
+            "cardId": "ca657846-f352-4ac4-b2b3-d0ced6607163",
+            "cardName": "Fireblade Charger",
+            "manaCost": "{R}",
+            "typeLine": "Creature — Goblin Warrior",
+            "producedMana": "[]",
+            "oracleText": "As long as this creature is equipped, it has haste.\nWhen this creature dies, it deals damage equal to its power to any target.",
+            "keywords": "[]",
+            "baseToughness": "1",
+            "basePower": "1",
+            "baseLoyalty": "",
+            "damageMarked": "0",
+            "effectiveManaCost": "{R}"
+          },
+          "image": "https://cards.scryfall.io/normal/front/c/a/ca657846-f352-4ac4-b2b3-d0ced6607163.jpg?1783929360",
+          "classes": []
+        }
+      ]
+    }
+  }
+}
