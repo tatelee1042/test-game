@@ -15,3 +15,6 @@ comprehensive-rules-*.pkl
 # Local tool caches
 .impeccable/
 .claude/
+
+# npm, if anything is ever added
+node_modules/

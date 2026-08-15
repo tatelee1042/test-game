@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=72" />
+    <link rel="stylesheet" href="styles.css?v=73" />
   </head>
   <body>
     <main class="game-board" data-seat-count="2" aria-label="Magic puzzle board">
@@ -132,13 +132,68 @@
       </section>
     </main>
 
-    <div class="edit-controls">
+    <div class="puzzle-bar">
+      <div class="puzzle-identity">
+        <p class="eyebrow">Daily Spellbook</p>
+        <h2 class="puzzle-title">Loading today's puzzle…</h2>
+        <p class="puzzle-meta"></p>
+      </div>
+      <button class="archive-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">▤</span> Archive</button>
+    </div>
+
+    <!-- Authoring only. Removed from the page entirely unless the local
+         authoring server answers, and unreachable on the published site. -->
+    <div class="edit-controls" hidden>
       <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
       <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
       <button class="add-seat" type="button" disabled><span aria-hidden="true">👤</span> Add opponent</button>
       <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
+      <button class="publish-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▲</span> Publish puzzle</button>
       <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
     </div>
+
+    <div class="archive-backdrop" hidden></div>
+    <aside class="archive-drawer" role="dialog" aria-modal="true" aria-labelledby="archive-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Every puzzle so far</p>
+          <h2 id="archive-title">Archive</h2>
+        </div>
+        <button class="close-archive" type="button" aria-label="Close archive">×</button>
+      </header>
+      <div class="archive-list"></div>
+    </aside>
+
+    <div class="publish-backdrop" hidden></div>
+    <aside class="publish-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Publish to the archive</p>
+          <h2 id="publish-title">Publish puzzle</h2>
+        </div>
+        <button class="close-publish" type="button" aria-label="Close publish dialog">×</button>
+      </header>
+      <p class="publish-copy">Writes the current board into <code>puzzles/</code>. Commit and push to put it live.</p>
+      <form class="publish-form">
+        <label class="publish-field">
+          <span>Title</span>
+          <input type="text" name="title" maxlength="80" autocomplete="off" required placeholder="Lethal on Turn Three" />
+        </label>
+        <label class="publish-field">
+          <span>Date</span>
+          <input type="date" name="date" required />
+        </label>
+        <label class="publish-field">
+          <span>Notes</span>
+          <textarea name="notes" rows="2" maxlength="240" placeholder="Optional hint or flavour shown in the archive."></textarea>
+        </label>
+        <p class="publish-status" role="status"></p>
+        <div class="publish-actions">
+          <button type="submit" class="confirm-publish">Publish</button>
+          <button type="button" class="cancel-publish">Cancel</button>
+        </div>
+      </form>
+    </aside>
     <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus any battlefield card and press T to tap</div>
     <div class="drawer-backdrop" hidden></div>
     <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">
@@ -298,7 +353,8 @@
       </div>
     </aside>
 
-    <script src="app.js?v=72" defer></script>
+    <script src="storage.js?v=73" defer></script>
+    <script src="app.js?v=73" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];

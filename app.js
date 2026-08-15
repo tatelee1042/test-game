@@ -359,6 +359,21 @@ const cardHoverPreviewImage = cardHoverPreview.querySelector("img");
 const saveManagerTrigger = document.querySelector(".save-manager-trigger");
 const clearBoardButton = document.querySelector(".clear-board");
 const addSeatButton = document.querySelector(".add-seat");
+const editControls = document.querySelector(".edit-controls");
+const puzzleTitle = document.querySelector(".puzzle-title");
+const puzzleMeta = document.querySelector(".puzzle-meta");
+const archiveTrigger = document.querySelector(".archive-trigger");
+const archiveDrawer = document.querySelector(".archive-drawer");
+const archiveBackdrop = document.querySelector(".archive-backdrop");
+const archiveList = document.querySelector(".archive-list");
+const closeArchiveButton = document.querySelector(".close-archive");
+const publishTrigger = document.querySelector(".publish-trigger");
+const publishDialog = document.querySelector(".publish-dialog");
+const publishBackdrop = document.querySelector(".publish-backdrop");
+const publishForm = document.querySelector(".publish-form");
+const publishStatus = document.querySelector(".publish-status");
+const closePublishButton = document.querySelector(".close-publish");
+const cancelPublishButton = document.querySelector(".cancel-publish");
 const seatBehaviorPanel = document.querySelector(".seat-behavior-panel");
 const seatBehaviorBackdrop = document.querySelector(".seat-behavior-backdrop");
 const seatBehaviorTitle = document.querySelector("#seat-behavior-title");
@@ -2579,6 +2594,188 @@ function saveSeatBehaviorFromForm() {
   seatBehaviorTitle.textContent = `${seatLabel(behaviorSeatId)} · behavior`;
 }
 
+/* ---------------------------------------------------------------------------
+ * Puzzles
+ *
+ * Visitors land on the puzzle dated today and can browse everything published
+ * before it. All reads and writes go through window.PuzzleStore, so moving from
+ * committed JSON files to a hosted database later means swapping that one
+ * adapter rather than touching anything here.
+ * ------------------------------------------------------------------------- */
+
+let loadedPuzzle = null;
+
+function formatPuzzleDate(date) {
+  // Parsed as local noon so the date never slips a day across timezones.
+  const parsed = new Date(`${date}T12:00:00`);
+  return Number.isNaN(parsed.valueOf())
+    ? date
+    : parsed.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+}
+
+function paintPuzzleBar(entry, { note = "" } = {}) {
+  if (!entry) {
+    puzzleTitle.textContent = note || "No puzzle published yet";
+    puzzleMeta.textContent = window.PuzzleStore?.authoringAvailable
+      ? "Build a board, then use Publish puzzle."
+      : "Check back soon.";
+    return;
+  }
+  puzzleTitle.textContent = entry.title;
+  const isToday = entry.date === window.PuzzleStore?.today();
+  puzzleMeta.textContent = [
+    isToday ? "Today" : formatPuzzleDate(entry.date),
+    entry.seats ? `${entry.seats} players` : "",
+    note,
+  ].filter(Boolean).join(" · ");
+}
+
+/** Puts a published puzzle on the board. */
+async function openPuzzle(id, { announce = true } = {}) {
+  const puzzle = await PuzzleStore.getPuzzle(id);
+  if (!puzzle?.state) {
+    showMessage("That puzzle could not be loaded.", "error");
+    return false;
+  }
+  loadedPuzzle = puzzle;
+  loadBoardState(puzzle.state);
+  paintPuzzleBar(puzzle, { note: puzzle.notes ? "" : "" });
+  // Deep links keep working when a visitor shares a specific puzzle.
+  const url = new URL(window.location.href);
+  url.searchParams.set("puzzle", puzzle.id);
+  window.history.replaceState({}, "", url);
+  if (announce) showMessage(`Loaded “${puzzle.title}”.`, "success");
+  return true;
+}
+
+async function renderArchive() {
+  const released = await PuzzleStore.listReleasedPuzzles();
+  archiveList.replaceChildren();
+  if (!released.length) {
+    const empty = document.createElement("p");
+    empty.className = "archive-empty";
+    empty.textContent = "Nothing published yet.";
+    archiveList.append(empty);
+    return;
+  }
+  const todayDate = PuzzleStore.today();
+  released.forEach((entry) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "archive-entry";
+    row.classList.toggle("is-current", entry.id === loadedPuzzle?.id);
+    const title = document.createElement("strong");
+    title.textContent = entry.title;
+    const meta = document.createElement("span");
+    meta.textContent = [
+      entry.date === todayDate ? "Today" : formatPuzzleDate(entry.date),
+      entry.seats ? `${entry.seats} players` : "",
+      entry.cardCount ? `${entry.cardCount} cards` : "",
+    ].filter(Boolean).join(" · ");
+    row.append(title, meta);
+    row.addEventListener("click", async () => {
+      if (await openPuzzle(entry.id)) closeArchive();
+    });
+    archiveList.append(row);
+  });
+}
+
+async function openArchive() {
+  await renderArchive();
+  archiveDrawer.hidden = false;
+  archiveBackdrop.hidden = false;
+}
+
+function closeArchive() {
+  archiveDrawer.hidden = true;
+  archiveBackdrop.hidden = true;
+}
+
+/**
+ * On load: an explicit ?puzzle= wins, otherwise today's puzzle, otherwise the
+ * most recent one published before today.
+ */
+async function loadOpeningPuzzle() {
+  const requested = new URL(window.location.href).searchParams.get("puzzle");
+  if (requested && await openPuzzle(requested, { announce: false })) return;
+  const daily = await PuzzleStore.getDailyPuzzle();
+  if (!daily) {
+    paintPuzzleBar(null);
+    return;
+  }
+  await openPuzzle(daily.id, { announce: false });
+  if (daily.date !== PuzzleStore.today()) {
+    paintPuzzleBar(daily, { note: "most recent" });
+  }
+}
+
+function openPublishDialog() {
+  if (!PuzzleStore.authoringAvailable) return;
+  publishStatus.textContent = "";
+  publishStatus.dataset.tone = "";
+  // Editing a puzzle that is already open pre-fills its details so publishing
+  // updates it in place rather than creating a duplicate.
+  publishForm.elements.title.value = loadedPuzzle?.title || "";
+  publishForm.elements.date.value = loadedPuzzle?.date || PuzzleStore.today();
+  publishForm.elements.notes.value = loadedPuzzle?.notes || "";
+  publishDialog.hidden = false;
+  publishBackdrop.hidden = false;
+  window.setTimeout(() => publishForm.elements.title.focus(), 80);
+}
+
+function closePublishDialog() {
+  publishDialog.hidden = true;
+  publishBackdrop.hidden = true;
+}
+
+async function submitPublish(event) {
+  event.preventDefault();
+  const title = publishForm.elements.title.value.trim();
+  const date = publishForm.elements.date.value;
+  if (!title || !date) return;
+  publishStatus.textContent = "Publishing…";
+  publishStatus.dataset.tone = "";
+  try {
+    const entry = await PuzzleStore.savePuzzle({
+      // Reuse the id only when the title and date still match the open puzzle,
+      // so renaming or re-dating produces a new puzzle rather than overwriting.
+      id: loadedPuzzle && loadedPuzzle.title === title && loadedPuzzle.date === date ? loadedPuzzle.id : "",
+      title,
+      date,
+      notes: publishForm.elements.notes.value.trim(),
+      state: captureBoardState(),
+    });
+    loadedPuzzle = { ...entry, notes: publishForm.elements.notes.value.trim(), state: null };
+    paintPuzzleBar(entry);
+    publishStatus.textContent = `Saved to puzzles/${entry.id}.json — commit and push to put it live.`;
+    publishStatus.dataset.tone = "success";
+    showMessage(`Published “${entry.title}”.`, "success");
+  } catch (error) {
+    publishStatus.textContent = error.message;
+    publishStatus.dataset.tone = "error";
+  }
+}
+
+/**
+ * Authoring controls only exist where the write API does. On the published site
+ * the probe fails and they are never put into the page — and since there is no
+ * endpoint behind them, forcing them on in devtools changes nothing for anyone
+ * but the person doing it.
+ */
+async function initialisePuzzleMode() {
+  // Without the storage adapter there are no puzzles to show, but the board
+  // itself must still work rather than dying on a missing script.
+  if (!window.PuzzleStore) {
+    editControls.remove();
+    paintPuzzleBar(null, { note: "Puzzle storage unavailable" });
+    return;
+  }
+  await PuzzleStore.detectAuthoring();
+  editControls.hidden = !PuzzleStore.authoringAvailable;
+  if (!PuzzleStore.authoringAvailable) editControls.remove();
+  await loadOpeningPuzzle();
+}
+
 function openImporter() {
   if (!editingMode) return;
   importer.drawer.setAttribute("aria-hidden", "false");
@@ -2604,6 +2801,7 @@ function setEditingMode(enabled) {
     : '<span aria-hidden="true">✦</span> Edit board';
   importer.trigger.disabled = !enabled;
   saveManagerTrigger.disabled = !enabled;
+  publishTrigger.disabled = !enabled;
   clearBoardButton.disabled = !enabled;
   importer.editBanner.hidden = !enabled;
   syncSeatControls();
@@ -2620,6 +2818,7 @@ function setEditingMode(enabled) {
     if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
     closeSaveManager();
     closeSeatBehavior();
+    closePublishDialog();
   }
 }
 
@@ -4446,6 +4645,14 @@ document.addEventListener("keydown", (event) => {
     closeSeatBehavior();
     return;
   }
+  if (!publishDialog.hidden) {
+    closePublishDialog();
+    return;
+  }
+  if (!archiveDrawer.hidden) {
+    closeArchive();
+    return;
+  }
   if (selectedCard) cancelPlacement();
   else if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
 });
@@ -4503,6 +4710,15 @@ paintSeatTurnMarkers();
 // Every zone on the board wires itself the same way, human seat or not.
 allZones().forEach(registerZone);
 
+archiveTrigger.addEventListener("click", openArchive);
+closeArchiveButton.addEventListener("click", closeArchive);
+archiveBackdrop.addEventListener("click", closeArchive);
+publishTrigger.addEventListener("click", openPublishDialog);
+closePublishButton.addEventListener("click", closePublishDialog);
+cancelPublishButton.addEventListener("click", closePublishDialog);
+publishBackdrop.addEventListener("click", closePublishDialog);
+publishForm.addEventListener("submit", submitPublish);
+
 addSeatButton.addEventListener("click", addSeat);
 closeSeatBehaviorButton.addEventListener("click", closeSeatBehavior);
 seatBehaviorBackdrop.addEventListener("click", closeSeatBehavior);
@@ -4534,5 +4750,6 @@ recalculateStaticAbilities();
 
 renderManaPool();
 setEditingMode(false);
+initialisePuzzleMode();
 
 cancelManaChoiceButton.addEventListener("click", closeManaChoicePrompt);
