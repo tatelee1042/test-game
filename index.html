@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=73" />
+    <link rel="stylesheet" href="styles.css?v=74" />
   </head>
   <body>
     <main class="game-board" data-seat-count="2" aria-label="Magic puzzle board">
@@ -144,12 +144,17 @@
     <!-- Authoring only. Removed from the page entirely unless the local
          authoring server answers, and unreachable on the published site. -->
     <div class="edit-controls" hidden>
-      <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
-      <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
-      <button class="add-seat" type="button" disabled><span aria-hidden="true">👤</span> Add opponent</button>
-      <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
-      <button class="publish-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▲</span> Publish puzzle</button>
-      <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
+      <button class="edit-controls-toggle" type="button" aria-expanded="true" aria-controls="edit-control-buttons">
+        <span aria-hidden="true">▾</span> Hide tools
+      </button>
+      <div class="edit-control-buttons" id="edit-control-buttons">
+        <button class="edit-toggle" type="button" aria-pressed="false"><span aria-hidden="true">✦</span> Edit board</button>
+        <button class="import-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">＋</span> Add card</button>
+        <button class="add-seat" type="button" disabled><span aria-hidden="true">👤</span> Add opponent</button>
+        <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
+        <button class="publish-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▲</span> Publish puzzle</button>
+        <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
+      </div>
     </div>
 
     <div class="archive-backdrop" hidden></div>
@@ -353,8 +358,8 @@
       </div>
     </aside>
 
-    <script src="storage.js?v=73" defer></script>
-    <script src="app.js?v=73" defer></script>
+    <script src="storage.js?v=74" defer></script>
+    <script src="app.js?v=74" defer></script>
     <script>
       const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];

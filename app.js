@@ -360,6 +360,7 @@ const saveManagerTrigger = document.querySelector(".save-manager-trigger");
 const clearBoardButton = document.querySelector(".clear-board");
 const addSeatButton = document.querySelector(".add-seat");
 const editControls = document.querySelector(".edit-controls");
+const editControlsToggle = document.querySelector(".edit-controls-toggle");
 const puzzleTitle = document.querySelector(".puzzle-title");
 const puzzleMeta = document.querySelector(".puzzle-meta");
 const archiveTrigger = document.querySelector(".archive-trigger");
@@ -4709,6 +4710,15 @@ paintSeatTurnMarkers();
 
 // Every zone on the board wires itself the same way, human seat or not.
 allZones().forEach(registerZone);
+
+/** Tucks the editing hotbar away so the board underneath stays reachable. */
+editControlsToggle.addEventListener("click", () => {
+  const minimized = editControls.classList.toggle("minimized");
+  editControlsToggle.setAttribute("aria-expanded", String(!minimized));
+  editControlsToggle.innerHTML = minimized
+    ? '<span aria-hidden="true">\u25b8</span> Tools'
+    : '<span aria-hidden="true">\u25be</span> Hide tools';
+});
 
 archiveTrigger.addEventListener("click", openArchive);
 closeArchiveButton.addEventListener("click", closeArchive);

@@ -711,16 +711,51 @@ h2 {
   100% { opacity: 1; transform: scale(1.08); }
 }
 
+/*
+ * Sits clear of the top seat's header bar so it never covers an opponent's HP
+ * controls, and collapses to just its handle when the board underneath needs
+ * to be reachable.
+ */
 .edit-controls {
   position: fixed;
   z-index: 20;
   right: 24px;
-  top: 82px;
+  top: 140px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
   transform: none;
+}
+
+.edit-control-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.edit-controls.minimized .edit-control-buttons {
+  display: none;
+}
+
+.edit-controls-toggle {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(6, 11, 12, 0.88);
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.16s ease, color 0.16s ease;
+}
+
+.edit-controls-toggle:hover {
+  border-color: rgba(211, 170, 88, 0.55);
+  color: var(--gold-bright);
 }
 
 .import-trigger,
@@ -1427,6 +1462,27 @@ body.editing-mode .seat-edit-actions {
   overflow: visible;
   align-items: flex-start;
   padding-block: 3px 0;
+}
+
+/*
+ * An empty hand centres its label in the middle of the zone. Once cards arrive
+ * the label would otherwise sit inline and shove them sideways, so it leaves
+ * the flow and rides along the bottom edge — still horizontally centred, never
+ * pushed up top, and never taking room from the cards.
+ */
+.hand-zone:has(.board-card) .zone-label {
+  position: absolute;
+  z-index: 2;
+  bottom: 2px;
+  left: 50%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(4, 8, 9, 0.72);
+  font-size: 0.55rem;
+  opacity: 0.75;
+  pointer-events: none;
+  transform: translateX(-50%);
+  backdrop-filter: blur(3px);
 }
 
 .hand-zone .board-card {
