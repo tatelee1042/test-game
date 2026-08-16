@@ -3,8 +3,9 @@
   "title": "Test game 1",
   "date": "2026-08-15",
   "notes": "goblin",
+  "instructions": "This is a test. Kill the opponent before your their next turn.",
   "state": {
-    "savedAt": "2026-08-15T07:18:02.436Z",
+    "savedAt": "2026-08-16T18:56:37.876Z",
     "phase": "Untap",
     "turnNumber": 1,
     "turnSeat": "player",
@@ -23,7 +24,7 @@
       },
       "opponent": {
         "label": "Your Opponent",
-        "life": "20",
+        "life": "11",
         "counters": {
           "poison": 0,
           "experience": 0
@@ -39,7 +40,7 @@
       }
     },
     "life": [
-      "20",
+      "11",
       "20"
     ],
     "counters": [
