@@ -138,7 +138,12 @@
         <h2 class="puzzle-title">Loading today's puzzle…</h2>
         <p class="puzzle-meta"></p>
       </div>
-      <button class="archive-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">▤</span> Archive</button>
+      <div class="puzzle-actions">
+        <!-- Only shown once the open puzzle actually carries instructions. -->
+        <button class="instructions-trigger" type="button" aria-haspopup="dialog" hidden><span aria-hidden="true">❓</span> Instructions</button>
+        <button class="reset-puzzle" type="button" disabled><span aria-hidden="true">↺</span> Reset</button>
+        <button class="archive-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">▤</span> Archive</button>
+      </div>
     </div>
 
     <!-- Authoring only. Removed from the page entirely unless the local
@@ -192,6 +197,14 @@
           <span>Notes</span>
           <textarea name="notes" rows="2" maxlength="240" placeholder="Optional hint or flavour shown in the archive."></textarea>
         </label>
+        <label class="publish-field">
+          <span>Instructions</span>
+          <textarea name="instructions" rows="5" maxlength="1200" placeholder="Shown in a popup when a player opens this puzzle. Blank lines start a new paragraph. Leave empty for no popup."></textarea>
+        </label>
+        <div class="publish-field">
+          <span aria-hidden="true"></span>
+          <button type="button" class="preview-instructions">Preview popup</button>
+        </div>
         <p class="publish-status" role="status"></p>
         <div class="publish-actions">
           <button type="submit" class="confirm-publish">Publish</button>
@@ -199,6 +212,23 @@
         </div>
       </form>
     </aside>
+    <!-- Opens by itself whenever a puzzle that carries instructions is loaded,
+         and again from the Instructions button in the puzzle bar. -->
+    <div class="instructions-backdrop" hidden></div>
+    <aside class="instructions-dialog" role="dialog" aria-modal="true" aria-labelledby="instructions-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Before you begin</p>
+          <h2 id="instructions-title">How to play this puzzle</h2>
+        </div>
+        <button class="close-instructions" type="button" aria-label="Close instructions">×</button>
+      </header>
+      <div class="instructions-body"></div>
+      <div class="instructions-actions">
+        <button type="button" class="dismiss-instructions">Got it</button>
+      </div>
+    </aside>
+
     <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus any battlefield card and press T to tap</div>
     <div class="drawer-backdrop" hidden></div>
     <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">

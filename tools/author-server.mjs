@@ -79,7 +79,15 @@ async function publishPuzzle(record) {
   if (!id) throw new Error("That title has no characters usable in a filename.");
 
   await fs.mkdir(PUZZLE_DIR, { recursive: true });
-  const puzzle = { id, title, date, notes: String(record.notes || "").trim(), state: record.state };
+  const puzzle = {
+    id,
+    title,
+    date,
+    notes: String(record.notes || "").trim(),
+    // Shown in a popup when a player opens the puzzle. Empty means no popup.
+    instructions: String(record.instructions || "").trim(),
+    state: record.state,
+  };
   await fs.writeFile(path.join(PUZZLE_DIR, `${id}.json`), `${JSON.stringify(puzzle, null, 2)}\n`);
 
   const entries = await readIndex();

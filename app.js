@@ -368,6 +368,14 @@ const archiveDrawer = document.querySelector(".archive-drawer");
 const archiveBackdrop = document.querySelector(".archive-backdrop");
 const archiveList = document.querySelector(".archive-list");
 const closeArchiveButton = document.querySelector(".close-archive");
+const resetPuzzleButton = document.querySelector(".reset-puzzle");
+const instructionsTrigger = document.querySelector(".instructions-trigger");
+const instructionsDialog = document.querySelector(".instructions-dialog");
+const instructionsBackdrop = document.querySelector(".instructions-backdrop");
+const instructionsBody = document.querySelector(".instructions-body");
+const closeInstructionsButton = document.querySelector(".close-instructions");
+const dismissInstructionsButton = document.querySelector(".dismiss-instructions");
+const previewInstructionsButton = document.querySelector(".preview-instructions");
 const publishTrigger = document.querySelector(".publish-trigger");
 const publishDialog = document.querySelector(".publish-dialog");
 const publishBackdrop = document.querySelector(".publish-backdrop");
@@ -416,6 +424,8 @@ let cardHoverTimer = null;
 let hoveredBoardCard = null;
 let clearBoardArmed = false;
 let clearBoardTimer = null;
+let resetPuzzleArmed = false;
+let resetPuzzleTimer = null;
 const SAVE_STORAGE_KEY = "daily-spellbook-board-saves-v1";
 const SAVE_SLOT_COUNT = 10;
 const tokenCardCache = new Map();
@@ -2606,6 +2616,19 @@ function saveSeatBehaviorFromForm() {
 
 let loadedPuzzle = null;
 
+/**
+ * The board exactly as its author published it. Kept as a detached deep copy so
+ * that playing the puzzle — or editing it — can never mutate what Reset restores.
+ * Null until a puzzle is opened or published, which is when Reset has nothing to
+ * go back to and stays disabled.
+ */
+let puzzleBaseline = null;
+
+function setPuzzleBaseline(state) {
+  puzzleBaseline = state ? structuredClone(state) : null;
+  syncPuzzleActions();
+}
+
 function formatPuzzleDate(date) {
   // Parsed as local noon so the date never slips a day across timezones.
   const parsed = new Date(`${date}T12:00:00`);
@@ -2631,6 +2654,114 @@ function paintPuzzleBar(entry, { note = "" } = {}) {
   ].filter(Boolean).join(" · ");
 }
 
+/* ---------------------------------------------------------------------------
+ * Instructions popup
+ *
+ * Each puzzle can carry a set of instructions its author wrote. They open by
+ * themselves the first moment the puzzle is on the board, and stay reachable
+ * afterwards from the puzzle bar so closing them is never a one-way door.
+ * ------------------------------------------------------------------------- */
+
+/** Author text, never markup: blank lines split paragraphs, single ones break. */
+function renderInstructions(text) {
+  instructionsBody.replaceChildren();
+  String(text).trim().split(/\n\s*\n/).forEach((block) => {
+    const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) return;
+    const paragraph = document.createElement("p");
+    lines.forEach((line, index) => {
+      if (index) paragraph.append(document.createElement("br"));
+      paragraph.append(line);
+    });
+    instructionsBody.append(paragraph);
+  });
+}
+
+/** No-ops for a puzzle with no instructions, so callers can fire it blindly. */
+function openInstructions(text = loadedPuzzle?.instructions) {
+  if (!String(text || "").trim()) return false;
+  renderInstructions(text);
+  instructionsDialog.hidden = false;
+  instructionsBackdrop.hidden = false;
+  window.setTimeout(() => dismissInstructionsButton.focus(), 80);
+  return true;
+}
+
+function closeInstructions() {
+  instructionsDialog.hidden = true;
+  instructionsBackdrop.hidden = true;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reset
+ * ------------------------------------------------------------------------- */
+
+const RESET_BUTTON_LABEL = '<span aria-hidden="true">↺</span> Reset';
+
+function disarmResetPuzzle() {
+  window.clearTimeout(resetPuzzleTimer);
+  resetPuzzleArmed = false;
+  resetPuzzleButton.classList.remove("is-armed");
+  resetPuzzleButton.innerHTML = RESET_BUTTON_LABEL;
+}
+
+/** Keeps the puzzle bar honest about what the open puzzle actually offers. */
+function syncPuzzleActions() {
+  instructionsTrigger.hidden = !String(loadedPuzzle?.instructions || "").trim();
+  resetPuzzleButton.disabled = !puzzleBaseline;
+  disarmResetPuzzle();
+}
+
+/**
+ * Play leaves state scattered outside the board — a half-declared attack, mana
+ * floating in the pool, a spell mid-resolution. All of it points at cards that
+ * are about to be removed, so it goes before the baseline comes back.
+ */
+function clearTransientPlayState() {
+  cancelPlacement();
+  closeActivatedAbilityMenu();
+  clearCombatTargetPrompt();
+  combatAssignments.clear();
+  combatResolved = false;
+  targetingController?.abort();
+  targetingController = null;
+  resolvingSpell = null;
+  chosenTargets = [];
+  requiredTargetCount = 0;
+  triggerQueue = [];
+  activeTrigger = null;
+  spellStack.hidden = true;
+  spellStackBackdrop.hidden = true;
+  triggerViewer.hidden = true;
+  triggerViewerBackdrop.hidden = true;
+  abilityCostBar.hidden = true;
+  document.body.classList.remove("resolving-spell");
+  clearManaPool();
+}
+
+/**
+ * Puts the board back exactly as the author published it. Armed by the first
+ * click and confirmed by the second, because a stray click would otherwise throw
+ * away however far into the puzzle the player had worked.
+ */
+function resetPuzzle() {
+  if (!puzzleBaseline) return;
+  if (!resetPuzzleArmed) {
+    resetPuzzleArmed = true;
+    resetPuzzleButton.classList.add("is-armed");
+    resetPuzzleButton.textContent = "Confirm reset";
+    window.clearTimeout(resetPuzzleTimer);
+    resetPuzzleTimer = window.setTimeout(disarmResetPuzzle, 3500);
+    return;
+  }
+  disarmResetPuzzle();
+  clearTransientPlayState();
+  // A fresh copy each time: the baseline has to survive being restored twice.
+  loadBoardState(structuredClone(puzzleBaseline), { announce: false });
+  updateCombatButton();
+  showMessage("Board reset to the published puzzle.", "success");
+}
+
 /** Puts a published puzzle on the board. */
 async function openPuzzle(id, { announce = true } = {}) {
   const puzzle = await PuzzleStore.getPuzzle(id);
@@ -2639,13 +2770,20 @@ async function openPuzzle(id, { announce = true } = {}) {
     return false;
   }
   loadedPuzzle = puzzle;
-  loadBoardState(puzzle.state);
+  clearTransientPlayState();
+  loadBoardState(puzzle.state, { announce: false });
+  // Captured from the file rather than from the board, so Reset returns to what
+  // the author published and not to whatever the board happens to hold now.
+  setPuzzleBaseline(puzzle.state);
   paintPuzzleBar(puzzle, { note: puzzle.notes ? "" : "" });
   // Deep links keep working when a visitor shares a specific puzzle.
   const url = new URL(window.location.href);
   url.searchParams.set("puzzle", puzzle.id);
   window.history.replaceState({}, "", url);
   if (announce) showMessage(`Loaded “${puzzle.title}”.`, "success");
+  // The briefing is the first thing a player should meet. An author mid-edit has
+  // the Instructions button and the publish dialog's preview instead.
+  if (!editingMode) openInstructions(puzzle.instructions);
   return true;
 }
 
@@ -2719,6 +2857,7 @@ function openPublishDialog() {
   publishForm.elements.title.value = loadedPuzzle?.title || "";
   publishForm.elements.date.value = loadedPuzzle?.date || PuzzleStore.today();
   publishForm.elements.notes.value = loadedPuzzle?.notes || "";
+  publishForm.elements.instructions.value = loadedPuzzle?.instructions || "";
   publishDialog.hidden = false;
   publishBackdrop.hidden = false;
   window.setTimeout(() => publishForm.elements.title.focus(), 80);
@@ -2736,6 +2875,10 @@ async function submitPublish(event) {
   if (!title || !date) return;
   publishStatus.textContent = "Publishing…";
   publishStatus.dataset.tone = "";
+  const notes = publishForm.elements.notes.value.trim();
+  const instructions = publishForm.elements.instructions.value.trim();
+  // Captured once so the file, the baseline and the index all describe one board.
+  const state = captureBoardState();
   try {
     const entry = await PuzzleStore.savePuzzle({
       // Reuse the id only when the title and date still match the open puzzle,
@@ -2743,10 +2886,13 @@ async function submitPublish(event) {
       id: loadedPuzzle && loadedPuzzle.title === title && loadedPuzzle.date === date ? loadedPuzzle.id : "",
       title,
       date,
-      notes: publishForm.elements.notes.value.trim(),
-      state: captureBoardState(),
+      notes,
+      instructions,
+      state,
     });
-    loadedPuzzle = { ...entry, notes: publishForm.elements.notes.value.trim(), state: null };
+    loadedPuzzle = { ...entry, notes, instructions, state: null };
+    // What was just published is now the board Reset goes back to.
+    setPuzzleBaseline(state);
     paintPuzzleBar(entry);
     publishStatus.textContent = `Saved to puzzles/${entry.id}.json — commit and push to put it live.`;
     publishStatus.dataset.tone = "success";
@@ -2891,7 +3037,7 @@ function savedCardToScryfall(record) {
   };
 }
 
-function loadBoardState(state) {
+function loadBoardState(state, { announce = true } = {}) {
   closeManaChoicePrompt();
   clearAiTurnTimer();
   document.querySelectorAll(".board-card").forEach((card) => card.remove());
@@ -2937,7 +3083,7 @@ function loadBoardState(state) {
   syncSeatControls();
   const savedSeat = state.turnSeat && seatExists(state.turnSeat) ? state.turnSeat : HUMAN_SEAT;
   window.setTurnState?.(state.phase || "Untap", state.turnNumber || 1, savedSeat);
-  showMessage("Board save loaded.", "success");
+  if (announce) showMessage("Board save loaded.", "success");
 }
 
 function renderSaveSlots() {
@@ -4646,6 +4792,12 @@ document.addEventListener("keydown", (event) => {
     closeSeatBehavior();
     return;
   }
+  // Ahead of the publish dialog: the preview opens on top of it, so Escape has
+  // to peel the instructions off first rather than close both at once.
+  if (!instructionsDialog.hidden) {
+    closeInstructions();
+    return;
+  }
   if (!publishDialog.hidden) {
     closePublishDialog();
     return;
@@ -4728,6 +4880,21 @@ closePublishButton.addEventListener("click", closePublishDialog);
 cancelPublishButton.addEventListener("click", closePublishDialog);
 publishBackdrop.addEventListener("click", closePublishDialog);
 publishForm.addEventListener("submit", submitPublish);
+
+resetPuzzleButton.addEventListener("click", resetPuzzle);
+// Arming Reset must not outlive the player's attention on it.
+resetPuzzleButton.addEventListener("blur", disarmResetPuzzle);
+instructionsTrigger.addEventListener("click", () => openInstructions());
+closeInstructionsButton.addEventListener("click", closeInstructions);
+dismissInstructionsButton.addEventListener("click", closeInstructions);
+instructionsBackdrop.addEventListener("click", closeInstructions);
+// Authoring only: shows the draft exactly as a player will meet it.
+previewInstructionsButton.addEventListener("click", () => {
+  if (!openInstructions(publishForm.elements.instructions.value)) {
+    publishStatus.textContent = "Nothing to preview — the instructions are empty.";
+    publishStatus.dataset.tone = "";
+  }
+});
 
 addSeatButton.addEventListener("click", addSeat);
 closeSeatBehaviorButton.addEventListener("click", closeSeatBehavior);
