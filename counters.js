@@ -344,11 +344,15 @@ function parseCounterInstructions(text) {
   String(text || "").replace(COUNTER_INSTRUCTION, (_match, verb, amount, kindName, preposition, subject) => {
     const kind = NAME_TO_KIND.get(String(kindName).toLowerCase());
     if (!kind) return _match;
+    // "on target creature for each Goblin you control" is a subject plus a
+    // multiplier. The board resolves the tail; this only has to split them.
+    const [rawSubject, ...forEachParts] = String(subject).split(/\bfor each\b/i);
     instructions.push({
       action: /^remove/i.test(verb) || preposition.toLowerCase() === "from" ? "remove" : "put",
       kind,
       amount: Number(amount) || AMOUNT_WORDS[String(amount).toLowerCase()] || 1,
-      subject: String(subject).trim().toLowerCase(),
+      subject: rawSubject.trim().toLowerCase(),
+      forEach: forEachParts.length ? forEachParts.join("for each").trim().toLowerCase() : null,
     });
     return _match;
   });

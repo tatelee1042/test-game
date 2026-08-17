@@ -1690,11 +1690,17 @@ function counterRecipientsFor(subject, { source, controller, targets }) {
 function applyCounterInstructions(effect, controller, targets, source) {
   const results = [];
   const instructions = window.CounterCatalog?.parseCounterInstructions(effect) || [];
-  instructions.forEach(({ action, kind, amount, subject }) => {
+  instructions.forEach(({ action, kind, amount, subject, forEach }) => {
     const recipients = counterRecipientsFor(subject, { source, controller, targets });
     const label = window.CounterCatalog.label(kind);
+    // "a +1/+1 counter for each Goblin you control" scales by what is out there.
+    const multiplier = forEach === null || forEach === undefined
+      ? 1
+      : (boardQuantity(forEach, { source, targets, controller }) ?? 1);
+    const scaled = amount * multiplier;
+    if (!scaled) return;
     recipients.forEach((card) => {
-      const delta = action === "remove" ? -amount : amount;
+      const delta = action === "remove" ? -scaled : scaled;
       const before = cardCounterCount(card, kind);
       const after = adjustCardCounter(card, kind, delta);
       if (after === before) return;
@@ -2109,6 +2115,32 @@ function recalculateStaticAbilities() {
           card.classList.add("static-modified");
         }
       });
+    });
+  });
+
+  // Self-pumps that count the board: "This creature gets +1/+1 for each Goblin
+  // you control." Distinct from the anthems above, which modify other cards.
+  battlefieldCards.forEach((card) => {
+    if (!card.dataset.typeLine.includes("Creature")) return;
+    // Only wording that names the card itself pumps the card itself. An anthem
+    // ("Creatures you control get ...") was already applied above, and matching
+    // it here as well would double it.
+    const selfNames = ["this creature", "this permanent", "this card", "it", "~",
+      String(card.dataset.cardName || "").toLowerCase()]
+      .filter(Boolean)
+      .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const selfPump = new RegExp(
+      `^(?:${selfNames.join("|")})\\s+gets\\s+([+-]\\d+)\\/([+-]\\d+)\\s+for each\\s+([^.;]+)`,
+      "i",
+    );
+    staticAbilityLines(card).forEach((line) => {
+      const match = selfPump.exec(line);
+      if (!match) return;
+      const counted = boardQuantity(match[3], { source: card, controller: seatOfElement(card) });
+      if (!counted) return;
+      card.dataset.currentPower = String(Number(card.dataset.currentPower || 0) + Number(match[1]) * counted);
+      card.dataset.currentToughness = String(Number(card.dataset.currentToughness || 0) + Number(match[2]) * counted);
+      card.classList.add("static-modified");
     });
   });
 
@@ -3893,11 +3925,13 @@ function statPhraseValue(phrase, context) {
 function damageAmountFor(text, context = {}) {
   const effect = String(text || "");
   const literal = /\bdeals?\s+(\d+)\s+damage\b/i.exec(effect);
-  if (literal) return Number(literal[1]);
-  // "deals damage equal to its power", "equal to target creature's toughness".
-  const variable = /\bdeals?\s+damage\s+equal\s+to\s+([^.,;]+)/i.exec(effect);
+  // "deals 2 damage for each artifact you control" multiplies the printed number.
+  if (literal) return Number(literal[1]) * forEachMultiplier(effect, context);
+  // "deals damage equal to its power", "equal to the number of Mountains you
+  // control" — the same question, so the same resolver answers both.
+  const variable = /\bdeals?\s+damage\s+equal\s+to\s+(?:the number of\s+)?([^.,;]+)/i.exec(effect);
   if (!variable) return 0;
-  return statPhraseValue(variable[1], context) ?? 0;
+  return boardQuantity(variable[1], context) ?? 0;
 }
 
 function costContainsX(cost) {
@@ -3922,37 +3956,118 @@ function substituteXInCost(cost, chosenX) {
   return `{${generic}}${coloured}`;
 }
 
+/* ---------------------------------------------------------------------------
+ * Counting the board
+ *
+ * A great many cards set a number by looking at the board rather than by
+ * naming one: "for each creature you control", "equal to the number of cards
+ * in your hand", "where X is the number of Mountains you control". They are all
+ * the same question in different wrappers, so they all come here.
+ *
+ * boardQuantity answers one phrase. Its callers are whatever needs a number:
+ * damage, counter amounts, X, and self-pumps.
+ * ------------------------------------------------------------------------- */
+
+const CARD_TYPES = ["creature", "artifact", "enchantment", "land", "planeswalker", "permanent"];
+
+/** "Mountains" -> "mountain", "Elves" -> "elf", "Allies" -> "ally". */
+function singularize(word) {
+  const lower = String(word).toLowerCase();
+  if (lower.endsWith("ves")) return `${lower.slice(0, -3)}f`;
+  if (lower.endsWith("ies")) return `${lower.slice(0, -3)}y`;
+  if (lower.endsWith("es") && /(?:ch|sh|s|x|z)es$/.test(lower)) return lower.slice(0, -2);
+  if (lower.endsWith("s")) return lower.slice(0, -1);
+  return lower;
+}
+
+/** Which battlefields a phrase is asking about. */
+function battlefieldsForPhrase(phrase, controller) {
+  if (/\b(?:an?\s+)?opponents?\s+controls?\b|\byour opponents control\b/.test(phrase)) {
+    return seatsOtherThan(controller).map((seatId) => `${seatId}-battlefield`);
+  }
+  if (/\bon the battlefield\b/.test(phrase)) return seatIds().map((seatId) => `${seatId}-battlefield`);
+  return [`${controller}-battlefield`];
+}
+
+function permanentsMatching(phrase, controller) {
+  const zones = battlefieldsForPhrase(phrase, controller);
+  const cards = zones.flatMap((zone) => [...document.querySelectorAll(`[data-zone="${zone}"] .board-card`)]);
+  const type = CARD_TYPES.find((candidate) => new RegExp(`\\b${candidate}s?\\b`).test(phrase));
+  if (type && type !== "permanent") {
+    return cards.filter((card) => card.dataset.typeLine.toLowerCase().includes(type));
+  }
+  if (type === "permanent") return cards;
+  // No card type named, so the phrase is naming a subtype: "for each Goblin
+  // you control", "for each Mountain you control".
+  // The whole word is captured, plural and all, so singularize can see "elves"
+  // rather than an already-truncated "elve".
+  const subtype = /\b([a-z][a-z'-]+)\s+(?:you control|an? opponent controls|your opponents control|on the battlefield)\b/
+    .exec(phrase)?.[1];
+  if (!subtype) return cards;
+  const singular = singularize(subtype);
+  return cards.filter((card) => card.dataset.typeLine.toLowerCase().includes(singular));
+}
+
+/**
+ * The number a phrase like "creatures you control" stands for, or null when
+ * the phrase is not something the board can count.
+ */
+function boardQuantity(phrase, { source = null, targets = [], controller = null } = {}) {
+  const text = String(phrase || "").toLowerCase().trim();
+  if (!text) return null;
+  const seat = controller || (source ? seatOfElement(source) : HUMAN_SEAT);
+
+  // A creature's own power or toughness, which reads the same way.
+  const stat = statPhraseValue(text, { source, targets });
+  if (stat !== null) return stat;
+
+  if (/\bopponents?\b/.test(text) && !/\bcontrols?\b/.test(text)) return seatsOtherThan(seat).length;
+  if (/\byour life total\b|^life total\b/.test(text)) {
+    return Number(seatLifeTotal(seat)?.querySelector(".life-input")?.value || 0);
+  }
+
+  const zoneMatch = /\bcards? in (your|an opponent's) (hand|graveyard|exile)\b/.exec(text);
+  if (zoneMatch) {
+    const seats = zoneMatch[1] === "your" ? [seat] : seatsOtherThan(seat);
+    return seats.reduce(
+      (total, seatId) => total + document.querySelectorAll(`[data-zone="${seatId}-${zoneMatch[2]}"] > .board-card`).length,
+      0,
+    );
+  }
+
+  // "for each +1/+1 counter on it", "for each charge counter on this artifact".
+  // Matched against the catalog rather than by regex capture, because a name
+  // like "+1/+1" has no word boundary in front of it for \b to find.
+  if (/\bcounters?\s+on\b/.test(text)) {
+    const entry = (window.CounterCatalog?.all || [])
+      .filter((candidate) => text.includes(`${candidate.name.toLowerCase()} counter`))
+      .sort((left, right) => right.name.length - left.name.length)[0];
+    const subject = statSubjectFor(text, { source, targets });
+    if (entry && subject) return cardCounterCount(subject, entry.kind);
+  }
+
+  if (/\b(you control|opponents? controls?|on the battlefield)\b/.test(text)) {
+    return permanentsMatching(text, seat).length;
+  }
+  return null;
+}
+
+/**
+ * The multiplier a "for each ..." tail applies. One when the text has no such
+ * tail, so callers can multiply unconditionally.
+ */
+function forEachMultiplier(text, context) {
+  const tail = /\bfor each\s+([^.;]+)/i.exec(String(text || ""));
+  if (!tail) return 1;
+  const counted = boardQuantity(tail[1], context);
+  return counted === null ? 1 : counted;
+}
+
 /** "where X is the number of Islands you control" and its common relatives. */
 function definedXValue(source, text, targets = []) {
   const definition = /\bwhere X is (?:the number of |your )?(.+?)(?:[.,]|$)/i.exec(String(text || ""));
   if (!definition) return null;
-  const phrase = definition[1].toLowerCase();
-  const controller = source ? seatOfElement(source) : HUMAN_SEAT;
-
-  // "where X is its power" and friends read the creature's live stats.
-  const stat = statPhraseValue(phrase, { source, targets });
-  if (stat !== null) return stat;
-
-  if (/life total/.test(phrase)) return Number(seatLifeTotal(controller)?.querySelector(".life-input")?.value || 0);
-  if (/cards in your hand/.test(phrase)) {
-    return document.querySelectorAll('[data-zone="player-hand"] > .board-card').length;
-  }
-  if (/cards in your graveyard/.test(phrase)) {
-    return document.querySelectorAll('[data-zone="player-graveyard"] > .board-card').length;
-  }
-  const controlled = /you control/.test(phrase);
-  if (controlled) {
-    const type = ["creature", "artifact", "enchantment", "land", "planeswalker"]
-      .find((candidate) => phrase.includes(candidate));
-    const subtype = /\b([a-z]+)s? you control\b/.exec(phrase)?.[1];
-    return [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)]
-      .filter((card) => {
-        const line = card.dataset.typeLine.toLowerCase();
-        if (type) return line.includes(type);
-        return subtype ? line.includes(subtype) : true;
-      }).length;
-  }
-  return null;
+  return boardQuantity(definition[1], { source, targets });
 }
 
 /** The number X stands for on this card right now, or null if it is unknown. */
