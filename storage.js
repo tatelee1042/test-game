@@ -109,6 +109,29 @@ const PuzzleStore = {
     return payload;
   },
 
+  /**
+   * What is staged to go live: pending puzzle files, and how this branch stands
+   * against its remote. Authoring only — there is no git on the deployed site.
+   */
+  async gitStatus() {
+    const response = await fetch("api/git/status", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not read git status (${response.status}).`);
+    return payload;
+  },
+
+  /** Commits puzzles/ and pushes it, which is what putting a puzzle live means. */
+  async publishLive(message) {
+    const response = await fetch("api/git/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not publish (${response.status}).`);
+    return payload;
+  },
+
   async deletePuzzle(id) {
     const response = await fetch(`api/puzzles/${encodeURIComponent(id)}`, { method: "DELETE" });
     const payload = await response.json().catch(() => ({}));

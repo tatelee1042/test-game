@@ -214,7 +214,7 @@ function removeSeat(seatId) {
   seatBehaviors.delete(seatId);
   refreshSeatLabels();
   // The seat may have been mid-turn; hand the turn back to the human.
-  if (window.currentTurnSeat === seatId) window.setTurnState?.(window.currentTurnPhase || "Untap", window.currentTurnNumber || 1, HUMAN_SEAT);
+  if (window.currentTurnSeat === seatId) window.setTurnState?.(window.currentTurnPhase || "Upkeep", window.currentTurnNumber || 1, HUMAN_SEAT);
   assignSeatSlots();
   syncSeatControls();
   recalculateStaticAbilities();
@@ -331,6 +331,8 @@ const abilityCostBar = document.querySelector(".ability-cost-bar");
 const abilityCostBarCopy = abilityCostBar.querySelector("span");
 const payPermanentCostButton = abilityCostBar.querySelector(".pay-permanent-cost");
 const cancelPermanentCostButton = abilityCostBar.querySelector(".cancel-permanent-cost");
+const xValueField = abilityCostBar.querySelector(".x-value-field");
+const xValueInput = abilityCostBar.querySelector(".x-value-input");
 // Seats can be added and removed while the board is being authored, so these
 // collections are queried live rather than snapshotted once at startup.
 const allLifeInputs = () => [...document.querySelectorAll(".life-input")];
@@ -376,6 +378,30 @@ const instructionsBody = document.querySelector(".instructions-body");
 const closeInstructionsButton = document.querySelector(".close-instructions");
 const dismissInstructionsButton = document.querySelector(".dismiss-instructions");
 const previewInstructionsButton = document.querySelector(".preview-instructions");
+const counterManager = document.querySelector(".counter-manager");
+const counterManagerBackdrop = document.querySelector(".counter-manager-backdrop");
+const counterManagerTitle = document.querySelector("#counter-manager-title");
+const counterManagerCardName = document.querySelector(".counter-manager-card");
+const counterCurrent = document.querySelector(".counter-current");
+const counterSearchForm = document.querySelector(".counter-search");
+const counterSearchInput = document.querySelector("#counter-query");
+const counterSearchLabel = document.querySelector(".counter-search-label");
+const counterResults = document.querySelector(".counter-results");
+const closeCounterManagerButton = document.querySelector(".close-counter-manager");
+const upkeepPrompt = document.querySelector(".upkeep-prompt");
+const upkeepBackdrop = document.querySelector(".upkeep-backdrop");
+const upkeepActButton = document.querySelector(".upkeep-act");
+const upkeepPassButton = document.querySelector(".upkeep-pass");
+const deployTrigger = document.querySelector(".deploy-trigger");
+const deployDialog = document.querySelector(".deploy-dialog");
+const deployBackdrop = document.querySelector(".deploy-backdrop");
+const deployForm = document.querySelector(".deploy-form");
+const deployBranch = document.querySelector(".deploy-branch");
+const deployPending = document.querySelector(".deploy-pending");
+const deployStatus = document.querySelector(".deploy-status");
+const confirmDeployButton = document.querySelector(".confirm-deploy");
+const closeDeployButton = document.querySelector(".close-deploy");
+const cancelDeployButton = document.querySelector(".cancel-deploy");
 const publishTrigger = document.querySelector(".publish-trigger");
 const publishDialog = document.querySelector(".publish-dialog");
 const publishBackdrop = document.querySelector(".publish-backdrop");
@@ -434,6 +460,7 @@ let activeTrigger = null;
 let activeAbilitySource = null;
 let abilityTargetingController = null;
 let pendingAbilityPayment = null;
+let pendingXChoice = null;
 let pendingKickerCast = null;
 let pendingGraveyardCast = null;
 let pendingManaChoice = null;
@@ -511,6 +538,10 @@ function recordAlliedSpellCast() {
 }
 
 function resolvedOracleText(cardElement) {
+  return textWithXResolved(cardElement, rawResolvedOracleText(cardElement));
+}
+
+function rawResolvedOracleText(cardElement) {
   if (cardElement.dataset.resolutionEffectOverride) return cardElement.dataset.resolutionEffectOverride;
   return (cardElement.dataset.oracleText || "").split("\n").flatMap((line) => {
     if (/^(?:Kicker|Surge)\b/i.test(line.trim())) return [];
@@ -1411,12 +1442,160 @@ function applyPlayerCounterEffects(effect, controller, targets = []) {
   return [...recipients].map((player) => `${seatSubject(player)} gained ${amount} ${type} counter${amount === 1 ? "" : "s"}`);
 }
 
+/* ---------------------------------------------------------------------------
+ * Counters on permanents
+ *
+ * Every counter a card carries lives in one place: `dataset.counters`, a JSON
+ * map of counter kind to how many. The kinds themselves come from
+ * window.CounterCatalog (see counters.js), which is the wiki's full list.
+ *
+ * Most counters are pure markers — the card's own text says what they do, and
+ * the board's job is only to remember they are there. Two groups are different
+ * and the engine reads them: ±X/±Y counters change printed stats, and stun
+ * counters are spent instead of untapping.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Places the counters a permanent enters carrying, before it reaches the
+ * battlefield. This is a replacement effect (CR 614): the permanent is never
+ * on the battlefield without them, which matters because anything watching for
+ * it to enter — a "dies" check, an anthem, a lethal-damage sweep — must see the
+ * finished creature and not the printed one.
+ *
+ * Returns a description for the caller to announce, or "" when nothing applied.
+ */
+function applyEntersWithCounters(card) {
+  // X is still on the card at this point, so "enters with X +1/+1 counters"
+  // uses the value the player announced when casting it.
+  const text = textWithXResolved(card, card.dataset.oracleText || "");
+  const entering = window.CounterCatalog?.entersWithCounters(text) || [];
+  if (!entering.length) return "";
+  const counters = readCardCounters(card);
+  entering.forEach(({ kind, amount }) => {
+    counters[kind] = (counters[kind] || 0) + amount;
+  });
+  writeCardCounters(card, counters);
+  return entering
+    .map(({ kind, amount }) => `${amount} ${window.CounterCatalog.label(kind)} counter${amount === 1 ? "" : "s"}`)
+    .join(" and ");
+}
+
+function readCardCounters(card) {
+  try {
+    const parsed = JSON.parse(card.dataset.counters || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+/**
+ * A +1/+1 and a -1/-1 on the same permanent cancel as a state-based action
+ * (CR 704.5q), so they are never both stored.
+ */
+function annihilatePowerCounters(counters) {
+  const plus = counters["+1/+1"] || 0;
+  const minus = counters["-1/-1"] || 0;
+  if (plus > 0 && minus > 0) {
+    const cancelled = Math.min(plus, minus);
+    counters["+1/+1"] = plus - cancelled;
+    counters["-1/-1"] = minus - cancelled;
+  }
+  return counters;
+}
+
+function writeCardCounters(card, counters) {
+  const cleaned = Object.fromEntries(
+    Object.entries(annihilatePowerCounters({ ...counters }))
+      .map(([kind, count]) => [kind, Math.max(0, Math.trunc(Number(count) || 0))])
+      .filter(([, count]) => count > 0),
+  );
+  if (Object.keys(cleaned).length) card.dataset.counters = JSON.stringify(cleaned);
+  else delete card.dataset.counters;
+  renderCounterChips(card);
+  updateStunCounterBadge(card);
+  return cleaned;
+}
+
+function cardCounterCount(card, kind) {
+  return Number(readCardCounters(card)[kind] || 0);
+}
+
+/** The single way counters go on or come off a card. Returns the new total. */
+function adjustCardCounter(card, kind, delta) {
+  const counters = readCardCounters(card);
+  counters[kind] = Math.max(0, (Number(counters[kind]) || 0) + delta);
+  const written = writeCardCounters(card, counters);
+  // ±X/±Y counters feed printed stats, so the board has to restate them.
+  if (window.CounterCatalog?.powerCounterDelta(kind)) recalculateStaticAbilities();
+  return Number(written[kind] || 0);
+}
+
+/** Net stat change from every ±X/±Y counter a card is carrying. */
+function powerCounterTotals(card) {
+  return Object.entries(readCardCounters(card)).reduce((total, [kind, count]) => {
+    const delta = window.CounterCatalog?.powerCounterDelta(kind);
+    if (!delta) return total;
+    return { power: total.power + delta.power * count, toughness: total.toughness + delta.toughness * count };
+  }, { power: 0, toughness: 0 });
+}
+
+/**
+ * Saves written before counters were general stored the two the engine knew
+ * about in fields of their own. Fold them in the first time such a card loads.
+ */
+function migrateLegacyCounters(card) {
+  const legacy = {
+    "+1/+1": Number(card.dataset.plusOneCounters || 0),
+    stun: Number(card.dataset.stunCounters || 0),
+  };
+  delete card.dataset.plusOneCounters;
+  delete card.dataset.stunCounters;
+  if (!legacy["+1/+1"] && !legacy.stun) return;
+  const counters = readCardCounters(card);
+  Object.entries(legacy).forEach(([kind, count]) => {
+    if (count > 0) counters[kind] = (counters[kind] || 0) + count;
+  });
+  writeCardCounters(card, counters);
+}
+
+/**
+ * Draws the counters that are only markers. ±X/±Y counters are shown by
+ * recalculateStaticAbilities as a stat badge, and stun keeps its own badge and
+ * its break animation, so both are left out here.
+ */
+function renderCounterChips(card) {
+  const counters = readCardCounters(card);
+  const chips = Object.entries(counters)
+    .filter(([kind]) => kind !== "stun" && !window.CounterCatalog?.powerCounterDelta(kind))
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  let tray = card.querySelector(".counter-chips");
+  if (!chips.length) {
+    tray?.remove();
+    return;
+  }
+  if (!tray) {
+    tray = document.createElement("span");
+    tray.className = "counter-chips";
+    card.append(tray);
+  }
+  tray.replaceChildren();
+  chips.forEach(([kind, count]) => {
+    const label = window.CounterCatalog?.label(kind) || kind;
+    const chip = document.createElement("span");
+    chip.className = `counter-chip counter-chip-${window.CounterCatalog?.categoryOf(kind) || "named"}`;
+    chip.textContent = count > 1 ? `${label} ${count}` : label;
+    chip.title = `${count} ${label.toLowerCase()} counter${count === 1 ? "" : "s"}`;
+    tray.append(chip);
+  });
+}
+
 function updateStunCounterBadge(card) {
-  const amount = Number(card.dataset.stunCounters || 0);
+  const amount = cardCounterCount(card, "stun");
   let badge = card.querySelector(".stun-counter-badge");
   if (amount <= 0) {
     badge?.remove();
-    delete card.dataset.stunCounters;
     return;
   }
   if (!badge) {
@@ -1428,16 +1607,10 @@ function updateStunCounterBadge(card) {
   badge.title = `${amount} stun counter${amount === 1 ? "" : "s"}`;
 }
 
-function addStunCounters(card, amount = 1) {
-  card.dataset.stunCounters = String(Number(card.dataset.stunCounters || 0) + amount);
-  updateStunCounterBadge(card);
-}
-
 function untapPermanent(card) {
-  const stunCounters = Number(card.dataset.stunCounters || 0);
+  const stunCounters = cardCounterCount(card, "stun");
   if (stunCounters > 0) {
-    card.dataset.stunCounters = String(stunCounters - 1);
-    updateStunCounterBadge(card);
+    adjustCardCounter(card, "stun", -1);
     card.classList.add("stun-counter-removed");
     window.setTimeout(() => card.classList.remove("stun-counter-removed"), 520);
     return { untapped: false, stunRemoved: true };
@@ -1451,30 +1624,69 @@ function untapPermanent(card) {
   return { untapped: true, stunRemoved: false };
 }
 
-function applyPermanentStateEffects(effect, controller, targets = []) {
+/**
+ * Which permanents an instruction's subject phrase actually means.
+ *
+ * "this creature" and a card naming itself mean the ability's own source; a
+ * "you control" phrase sweeps the battlefield; anything else falls back to what
+ * the player targeted, and to the source when an ability targeted nothing.
+ */
+function counterRecipientsFor(subject, { source, controller, targets }) {
+  const onBattlefield = (card) => (card.parentElement?.dataset.zone || "").endsWith("-battlefield");
+  const boardTargets = targets.filter((target) => target?.classList?.contains("board-card"));
+  const sourceName = String(source?.dataset.cardName || "").toLowerCase();
+
+  const namesSource = /\b(it|itself|this|that)\b/.test(subject)
+    || (sourceName && subject.includes(sourceName));
+
+  const controlSweep = /\byou control\b/.test(subject);
+  if (controlSweep) {
+    const excludesSource = /\b(other|another)\b/.test(subject);
+    const type = ["creature", "artifact", "enchantment", "land", "planeswalker"]
+      .find((candidate) => subject.includes(candidate));
+    return [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)]
+      .filter((card) => !type || card.dataset.typeLine.toLowerCase().includes(type))
+      .filter((card) => !(excludesSource && card === source));
+  }
+
+  // A targeted ability puts its counters on what it targeted, even when the
+  // wording also says "it" — the target is the more specific answer.
+  if (boardTargets.length) return boardTargets.filter(onBattlefield);
+  if (namesSource && source && onBattlefield(source)) return [source];
+  return source && onBattlefield(source) ? [source] : [];
+}
+
+/**
+ * Puts counters where an ability says they go. Every counter kind in the
+ * catalog is understood, so a card only has to name one for it to work — no
+ * per-counter code, and removal is handled the same way as placement.
+ */
+function applyCounterInstructions(effect, controller, targets, source) {
   const results = [];
+  const instructions = window.CounterCatalog?.parseCounterInstructions(effect) || [];
+  instructions.forEach(({ action, kind, amount, subject }) => {
+    const recipients = counterRecipientsFor(subject, { source, controller, targets });
+    const label = window.CounterCatalog.label(kind);
+    recipients.forEach((card) => {
+      const delta = action === "remove" ? -amount : amount;
+      const before = cardCounterCount(card, kind);
+      const after = adjustCardCounter(card, kind, delta);
+      if (after === before) return;
+      const moved = Math.abs(after - before);
+      results.push(action === "remove"
+        ? `${targetLabel(card)} lost ${moved} ${label} counter${moved === 1 ? "" : "s"}`
+        : `${targetLabel(card)} got ${moved} ${label} counter${moved === 1 ? "" : "s"}`);
+    });
+  });
+  return results;
+}
+
+function applyPermanentStateEffects(effect, controller, targets = [], source = null) {
+  const results = applyCounterInstructions(effect, controller, targets, source);
   let creatures = targets.filter((target) => target.classList?.contains("board-card") && target.dataset.typeLine?.includes("Creature"));
   if (/\bcreatures? you control\b/i.test(effect)) {
     creatures = [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)]
       .filter((card) => card.dataset.typeLine.includes("Creature"));
-  }
-  const stunMatch = effect.match(/(?:put|puts?)\s+(a|an|one|two|three|four|five|\d+)\s+stun counters? on\s+(?:it|target creature)/i);
-  if (stunMatch) {
-    const amount = counterAmount(stunMatch[1]);
-    creatures.forEach((card) => {
-      addStunCounters(card, amount);
-      results.push(`${targetLabel(card)} gained ${amount} stun counter${amount === 1 ? "" : "s"}`);
-    });
-  }
-
-  const plusCounterMatch = effect.match(/put\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+\+1\/\+1\s+counters?\s+on/i);
-  if (plusCounterMatch) {
-    const amount = counterAmount(plusCounterMatch[1]);
-    creatures.forEach((card) => {
-      card.dataset.plusOneCounters = String(Number(card.dataset.plusOneCounters || 0) + amount);
-      results.push(`${targetLabel(card)} got ${amount} +1/+1 counter${amount === 1 ? "" : "s"}`);
-    });
-    if (creatures.length) recalculateStaticAbilities();
   }
 
   if (/\btap\s+(?:it|that creature|target creature)\b/i.test(effect)) {
@@ -1821,21 +2033,26 @@ function recalculateStaticAbilities() {
   battlefieldCards.forEach((card) => {
     card.dataset.currentPower = card.dataset.basePower;
     card.dataset.currentToughness = card.dataset.baseToughness;
-    // +1/+1 counters sit on top of printed stats and outlast end-of-turn cleanup.
-    const plusCounters = Number(card.dataset.plusOneCounters || 0);
-    if (plusCounters) {
-      card.dataset.currentPower = String(Number(card.dataset.basePower || 0) + plusCounters);
-      card.dataset.currentToughness = String(Number(card.dataset.baseToughness || 0) + plusCounters);
+    // ±X/±Y counters sit on top of printed stats and outlast end-of-turn cleanup.
+    const counterStats = powerCounterTotals(card);
+    if (counterStats.power || counterStats.toughness) {
+      card.dataset.currentPower = String(Number(card.dataset.basePower || 0) + counterStats.power);
+      card.dataset.currentToughness = String(Number(card.dataset.baseToughness || 0) + counterStats.toughness);
     }
     card.dataset.grantedKeywords = "[]";
     card.classList.remove("static-modified");
     card.querySelector(".static-stats-badge")?.remove();
     card.querySelector(".plus-counter-badge")?.remove();
-    if (plusCounters) {
+    if (counterStats.power || counterStats.toughness) {
+      const format = (value) => (value >= 0 ? `+${value}` : String(value));
       const badge = document.createElement("span");
       badge.className = "plus-counter-badge";
-      badge.textContent = `+${plusCounters}/+${plusCounters}`;
-      badge.title = `${plusCounters} +1/+1 counter${plusCounters === 1 ? "" : "s"}`;
+      badge.classList.toggle("negative-counter-badge", counterStats.power < 0 || counterStats.toughness < 0);
+      badge.textContent = `${format(counterStats.power)}/${format(counterStats.toughness)}`;
+      badge.title = Object.entries(readCardCounters(card))
+        .filter(([kind]) => window.CounterCatalog?.powerCounterDelta(kind))
+        .map(([kind, count]) => `${count} ${kind} counter${count === 1 ? "" : "s"}`)
+        .join(", ");
       card.append(badge);
     }
   });
@@ -2431,6 +2648,7 @@ function aiPlaysLand(seatId) {
   const land = [...hand.querySelectorAll(":scope > .board-card")]
     .find((card) => card.dataset.typeLine.includes("Land"));
   if (!land) return false;
+  applyEntersWithCounters(land);
   seatZone(seatId, "battlefield").append(land);
   refreshCardState(land);
   emitGameEvent("permanent-enter", { card: land, controller: seatId });
@@ -2454,9 +2672,11 @@ function aiCastsFromHand(seatId) {
       land.classList.add("tapped");
       refreshCardState(land);
     });
+    applyEntersWithCounters(card);
     battlefield.append(card);
     if (!cardHasHaste(card)) card.dataset.enteredTurn = String(window.currentTurnNumber || 1);
     refreshCardState(card);
+    recalculateStaticAbilities();
     emitGameEvent("permanent-enter", { card, controller: seatId });
     cast += 1;
   });
@@ -2537,7 +2757,8 @@ function declareAiAttackers(seatId) {
 function runAiPhase(seatId, phase) {
   const behavior = behaviorFor(seatId);
   switch (phase) {
-    case "Draw":
+    // Upkeep absorbed the old draw step, so the seat's draw happens here.
+    case "Upkeep":
       if (behavior.drawStep === "draw" && aiDrawsCard(seatId)) {
         showMessage(`${seatLabel(seatId)} drew a card.`);
       }
@@ -2903,6 +3124,370 @@ async function submitPublish(event) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * The counter manager
+ *
+ * One permanent at a time: what it already carries, and a search across every
+ * counter Magic prints. Open with C over a card on any battlefield — the same
+ * hover-or-focus idiom as T for tapping.
+ * ------------------------------------------------------------------------- */
+
+let counterManagerCard = null;
+
+/** Counters this card may be given: anything at all while authoring. */
+function counterChoicesFor(card) {
+  if (editingMode) return window.CounterCatalog.all;
+  return window.CounterCatalog.countersReferencedBy({
+    oracleText: card?.dataset.oracleText,
+    typeLine: card?.dataset.typeLine,
+  });
+}
+
+function renderCounterManager() {
+  counterManagerCardName.textContent = counterManagerCard?.dataset.cardName
+    || (editingMode ? "Click a card to choose one" : "No card selected");
+  if (!counterManagerCard) {
+    counterCurrent.replaceChildren();
+    const empty = document.createElement("p");
+    empty.className = "counter-empty";
+    empty.textContent = editingMode
+      ? "Pick any card on the board, then add counters to it."
+      : "Press C over a card to manage its counters.";
+    counterCurrent.append(empty);
+    counterResults.replaceChildren();
+    return;
+  }
+  const counters = readCardCounters(counterManagerCard);
+  const entries = Object.entries(counters).sort(([left], [right]) => left.localeCompare(right));
+
+  counterCurrent.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "counter-empty";
+    empty.textContent = "No counters on this permanent yet.";
+    counterCurrent.append(empty);
+  }
+  entries.forEach(([kind, count]) => {
+    const row = document.createElement("div");
+    row.className = "counter-row";
+    const name = document.createElement("span");
+    name.textContent = window.CounterCatalog?.label(kind) || kind;
+    const controls = document.createElement("span");
+    controls.className = "counter-row-controls";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "−";
+    remove.setAttribute("aria-label", `Remove one ${name.textContent} counter`);
+    remove.addEventListener("click", () => {
+      adjustCardCounter(counterManagerCard, kind, -1);
+      renderCounterManager();
+    });
+    const total = document.createElement("strong");
+    total.textContent = String(count);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.textContent = "+";
+    add.setAttribute("aria-label", `Add one ${name.textContent} counter`);
+    add.addEventListener("click", () => {
+      adjustCardCounter(counterManagerCard, kind, 1);
+      renderCounterManager();
+    });
+    controls.append(remove, total, add);
+    row.append(name, controls);
+    counterCurrent.append(row);
+  });
+
+  renderCounterSearchResults();
+}
+
+function renderCounterSearchResults() {
+  counterResults.replaceChildren();
+  if (!counterManagerCard) return;
+  const choices = counterChoicesFor(counterManagerCard);
+  const term = counterSearchInput.value.trim();
+  const allowed = new Set(choices.map((entry) => entry.kind));
+
+  // During play the card's own list is short enough to show outright. While
+  // authoring it is all 237, so that waits for a search to narrow it.
+  const matches = term
+    ? window.CounterCatalog.search(term).filter((entry) => allowed.has(entry.kind)).slice(0, 40)
+    : (editingMode ? [] : choices);
+
+  counterSearchLabel.textContent = editingMode
+    ? `Add any counter (${window.CounterCatalog.all.length} kinds)`
+    : "Counters this card uses";
+
+  if (!matches.length) {
+    const empty = document.createElement("p");
+    empty.className = "counter-empty";
+    empty.textContent = term
+      ? "No counter by that name."
+      : editingMode
+        ? `Search ${window.CounterCatalog.all.length} counter kinds.`
+        : "This card's text does not mention any counters.";
+    counterResults.append(empty);
+    return;
+  }
+  matches.forEach((entry) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "counter-option";
+    const name = document.createElement("strong");
+    name.textContent = entry.name;
+    const category = document.createElement("span");
+    category.textContent = entry.category === "power"
+      ? "changes power and toughness"
+      : entry.category === "keyword"
+        ? "grants this ability"
+        : "marker";
+    option.append(name, category);
+    option.addEventListener("click", () => {
+      adjustCardCounter(counterManagerCard, entry.kind, 1);
+      showMessage(`${counterManagerCard.dataset.cardName} got a ${entry.name} counter.`, "success");
+      renderCounterManager();
+    });
+    counterResults.append(option);
+  });
+}
+
+/**
+ * Opens on a card, or with no card at all while authoring — the author then
+ * clicks whichever card they mean. The backdrop only goes up when a card is
+ * targeted, so an untargeted panel leaves the board clickable.
+ */
+function openCounterManager(card = null) {
+  counterManagerCard = card;
+  counterManagerTitle.textContent = "Counters";
+  counterSearchInput.value = "";
+  renderCounterManager();
+  counterManager.hidden = false;
+  counterManagerBackdrop.hidden = editingMode;
+  counterManager.classList.toggle("is-picking", editingMode);
+  if (card) window.setTimeout(() => counterSearchInput.focus(), 80);
+}
+
+/** Retargets an already-open panel, used by the click-a-card flow in edit mode. */
+function targetCounterManager(card) {
+  counterManagerCard = card;
+  counterSearchInput.value = "";
+  renderCounterManager();
+}
+
+function closeCounterManager() {
+  counterManager.hidden = true;
+  counterManagerBackdrop.hidden = true;
+  counterManagerCard = null;
+}
+
+/* ---------------------------------------------------------------------------
+ * The upkeep
+ *
+ * An upkeep the player cannot act in is a click that asks a question with one
+ * answer, so the board answers it: entering upkeep with nothing available passes
+ * straight to Main 1. When something IS available the player is asked, and told
+ * what the options are rather than left to hunt for them.
+ *
+ * Triggers come first either way. A card that does something at the beginning of
+ * upkeep has to resolve before the player decides how to respond to it, so the
+ * prompt waits for the trigger queue to drain.
+ * ------------------------------------------------------------------------- */
+
+/** Mana the player could still produce this upkeep, floating or from lands. */
+function availableManaEstimate() {
+  const floating = MANA_TYPES.reduce((total, type) => total + manaPool[type], 0);
+  return floating + untappedLandsFor(HUMAN_SEAT).length;
+}
+
+/**
+ * Deliberately generous: it answers "is this worth stopping the player for",
+ * not "is this legal". Saying yes to something they cannot quite pay for costs
+ * one dismissed prompt; saying no to a real option loses them the puzzle.
+ */
+function couldPlausiblyPay(cost, source) {
+  const symbols = parseCost(cost);
+  if (symbols.includes("Q")) return false;
+  if (symbols.includes("T")) {
+    if (source.classList.contains("tapped")) return false;
+    if (source.classList.contains("summoning-sick") && source.dataset.typeLine.includes("Creature")) return false;
+  }
+  // {T} and {Q} are paid by tapping, not by mana — counting them as generic
+  // would price every tap ability one mana too high and hide it from the player.
+  const manaNeeded = symbols
+    .filter((symbol) => !/^[TQ]$/i.test(symbol))
+    .reduce((total, symbol) => total + (Number.isFinite(Number(symbol)) ? Number(symbol) : 1), 0);
+  // A non-mana cost (sacrifice, exile, discard) is judged payable; the real
+  // check runs when the player actually activates it.
+  return manaNeeded <= availableManaEstimate();
+}
+
+/**
+ * Whether the human seat could do anything at all with its upkeep. A count, not
+ * a list: the prompt says only that a play exists, because working out which one
+ * is the puzzle. Stops at the first hit.
+ */
+function playerHasUpkeepAction() {
+  const castableInstant = [...document.querySelectorAll('[data-zone="player-hand"] > .board-card')]
+    .some((card) => (card.dataset.typeLine || "").includes("Instant")
+      && couldPlausiblyPay(card.dataset.manaCost, card));
+  if (castableInstant) return true;
+
+  return [...document.querySelectorAll('[data-zone="player-battlefield"] > .board-card')]
+    // A land that only taps for mana is not an upkeep play on its own — there
+    // would be nothing to spend the mana on.
+    .filter((card) => !landTapsOnlyForMana(card))
+    .some((card) => activatedAbilitiesFor(card).some((option) => couldPlausiblyPay(option.cost, card)));
+}
+
+function closeUpkeepPrompt() {
+  upkeepPrompt.hidden = true;
+  upkeepBackdrop.hidden = true;
+}
+
+/** Leaves the player in their upkeep with the board live. */
+function stayInUpkeep() {
+  closeUpkeepPrompt();
+  showMessage("Your upkeep — press Next phase when you are done.", "success");
+}
+
+function passUpkeep() {
+  closeUpkeepPrompt();
+  window.advancePhase();
+}
+
+/**
+ * Runs once the player steps into their own upkeep. Waits out any triggers that
+ * the phase change queued, then either passes through or asks.
+ */
+function handleUpkeepEntered() {
+  // Checked first, so a trigger that moves the game on — or a board loaded out
+  // from under this — stops the wait rather than polling forever.
+  if (window.currentTurnPhase !== "Upkeep" || activeSeat() !== HUMAN_SEAT || editingMode) return;
+  // A trigger is still resolving: the player answers it before being asked what
+  // else they want to do. The trigger viewer drives that, so watch for the queue
+  // to drain rather than trying to drive it from here.
+  if (activeTrigger || triggerQueue.length) {
+    window.setTimeout(handleUpkeepEntered, 200);
+    return;
+  }
+
+  if (!playerHasUpkeepAction()) {
+    showMessage("Nothing to do in your upkeep — moving to Main 1.");
+    window.advancePhase();
+    return;
+  }
+  upkeepPrompt.hidden = false;
+  upkeepBackdrop.hidden = false;
+  window.setTimeout(() => upkeepActButton.focus(), 80);
+}
+
+/* ---------------------------------------------------------------------------
+ * Push live
+ *
+ * Putting a puzzle in front of players is a commit and a push of puzzles/, so
+ * the board offers to run exactly that. Everything happens in the authoring
+ * server; this side only shows what is pending and reports what happened.
+ * ------------------------------------------------------------------------- */
+
+/** Reads the same two letters git status prints, in words an author can act on. */
+function describePendingState(state) {
+  if (state === "??") return "new";
+  if (state.includes("D")) return "deleted";
+  if (state.includes("A")) return "added";
+  return "changed";
+}
+
+function renderDeployPending(status) {
+  deployPending.replaceChildren();
+  const { pending = [], ahead = 0 } = status;
+
+  if (!pending.length && !ahead) {
+    const empty = document.createElement("p");
+    empty.className = "deploy-empty";
+    empty.textContent = "Nothing to push — the live site already matches your puzzles.";
+    deployPending.append(empty);
+    return false;
+  }
+
+  pending.forEach((file) => {
+    const row = document.createElement("div");
+    row.className = "deploy-file";
+    const name = document.createElement("span");
+    name.textContent = file.path;
+    const tag = document.createElement("em");
+    tag.textContent = describePendingState(file.state);
+    row.append(name, tag);
+    deployPending.append(row);
+  });
+
+  if (ahead) {
+    const waiting = document.createElement("p");
+    waiting.className = "deploy-waiting";
+    waiting.textContent = `${ahead} commit${ahead === 1 ? "" : "s"} already committed and waiting to push.`;
+    deployPending.append(waiting);
+  }
+  return true;
+}
+
+async function openDeployDialog() {
+  if (!PuzzleStore.authoringAvailable) return;
+  deployStatus.textContent = "";
+  deployStatus.dataset.tone = "";
+  deployPending.replaceChildren();
+  deployBranch.textContent = "Checking the repository…";
+  confirmDeployButton.disabled = true;
+  deployDialog.hidden = false;
+  deployBackdrop.hidden = false;
+  // A sensible default message: the puzzle this board is currently showing.
+  deployForm.elements.message.value = loadedPuzzle?.title
+    ? `Publish “${loadedPuzzle.title}”`
+    : "Update puzzles";
+
+  try {
+    const status = await PuzzleStore.gitStatus();
+    deployBranch.textContent = status.upstream
+      ? `${status.branch} → ${status.upstream}`
+      : `${status.branch} · no upstream branch set`;
+    const hasWork = renderDeployPending(status);
+    confirmDeployButton.disabled = !hasWork || !status.upstream;
+    if (status.behind) {
+      deployStatus.textContent = `${status.branch} is ${status.behind} commit${status.behind === 1 ? "" : "s"} behind. Pull before pushing.`;
+      deployStatus.dataset.tone = "error";
+      confirmDeployButton.disabled = true;
+    }
+  } catch (error) {
+    deployBranch.textContent = "Repository unavailable";
+    deployStatus.textContent = error.message;
+    deployStatus.dataset.tone = "error";
+  }
+}
+
+function closeDeployDialog() {
+  deployDialog.hidden = true;
+  deployBackdrop.hidden = true;
+}
+
+async function submitDeploy(event) {
+  event.preventDefault();
+  confirmDeployButton.disabled = true;
+  deployStatus.textContent = "Committing and pushing…";
+  deployStatus.dataset.tone = "";
+  try {
+    const result = await PuzzleStore.publishLive(deployForm.elements.message.value.trim());
+    deployStatus.textContent = result.detail;
+    deployStatus.dataset.tone = result.pushed ? "success" : "";
+    if (result.pushed) showMessage("Pushed to the live site.", "success");
+    // Re-read rather than assume: the push either moved the branch or it did not.
+    const status = await PuzzleStore.gitStatus();
+    deployBranch.textContent = status.upstream ? `${status.branch} → ${status.upstream}` : status.branch;
+    renderDeployPending(status);
+  } catch (error) {
+    // Git's own words, which usually name the fix.
+    deployStatus.textContent = error.message;
+    deployStatus.dataset.tone = "error";
+    confirmDeployButton.disabled = false;
+  }
+}
+
 /**
  * Authoring controls only exist where the write API does. On the published site
  * the probe fails and they are never put into the page — and since there is no
@@ -2960,12 +3545,17 @@ function setEditingMode(enabled) {
   });
   document.querySelectorAll(".board-card").forEach(refreshCardState);
 
-  if (!enabled) {
+  if (enabled) {
+    // Authoring a board is mostly about what sits on the cards, so the counter
+    // panel comes up with the rest of the tools. It is closable like anything else.
+    openCounterManager(null);
+  } else {
     cancelPlacement();
     if (importer.drawer.getAttribute("aria-hidden") === "false") closeImporter();
     closeSaveManager();
     closeSeatBehavior();
     closePublishDialog();
+    closeCounterManager();
   }
 }
 
@@ -2998,7 +3588,7 @@ function serializeBoardCard(card) {
 function captureBoardState() {
   return {
     savedAt: new Date().toISOString(),
-    phase: window.currentTurnPhase || "Untap",
+    phase: window.currentTurnPhase || "Upkeep",
     turnNumber: window.currentTurnNumber || 1,
     turnSeat: activeSeat(),
     aiSeats: aiSeatIds(),
@@ -3082,7 +3672,7 @@ function loadBoardState(state, { announce = true } = {}) {
   refreshSeatLabels();
   syncSeatControls();
   const savedSeat = state.turnSeat && seatExists(state.turnSeat) ? state.turnSeat : HUMAN_SEAT;
-  window.setTurnState?.(state.phase || "Untap", state.turnNumber || 1, savedSeat);
+  window.setTurnState?.(state.phase || "Upkeep", state.turnNumber || 1, savedSeat);
   if (announce) showMessage("Board save loaded.", "success");
 }
 
@@ -3098,7 +3688,7 @@ function renderSaveSlots() {
     const meta = document.createElement("span");
     const cardCount = save ? Object.values(save.zones || {}).reduce((total, cards) => total + cards.length, 0) : 0;
     meta.textContent = save
-      ? `${cardCount} cards · ${save.phase || "Untap"} · ${new Date(save.savedAt).toLocaleString()}`
+      ? `${cardCount} cards · ${save.phase || "Upkeep"} · ${new Date(save.savedAt).toLocaleString()}`
       : "Empty slot";
     details.append(title, meta);
     const actions = document.createElement("div");
@@ -3194,6 +3784,169 @@ function parseCost(cost) {
   if (!cost) return [];
   const firstCost = cost.split(" // ")[0];
   return [...firstCost.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+}
+
+/* ---------------------------------------------------------------------------
+ * X
+ *
+ * X is whatever the card says it is. Two cases cover almost everything:
+ *
+ *   Chosen   The cost contains {X}, so the player announces a value as they
+ *            cast or activate, and pays for it. That number is what X is for
+ *            the rest of the card.
+ *   Defined  The card says "where X is the number of ...", and the board can
+ *            work it out without asking.
+ *
+ * Once X has a number, the ability text is rewritten with it before anything
+ * reads the text — so damage, counters and target counts all see a plain
+ * number and need no idea that X was ever involved.
+ * ------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+ * Reading power and toughness
+ *
+ * "equal to its power" has to mean the power the creature has right now —
+ * counters, anthems and until-end-of-turn pumps included — not the number
+ * printed on the card. recalculateStaticAbilities keeps currentPower and
+ * currentToughness up to date, so those are what every effect reads, with the
+ * printed values only as a fallback for a card that has never been recalculated.
+ * ------------------------------------------------------------------------- */
+
+function creatureStatValue(card, stat) {
+  if (!card?.dataset) return null;
+  const live = stat === "power" ? card.dataset.currentPower : card.dataset.currentToughness;
+  const printed = stat === "power" ? card.dataset.basePower : card.dataset.baseToughness;
+  const raw = live ?? printed;
+  // An artifact carries no power at all. Number("") is 0, which would quietly
+  // turn "no such stat" into a real zero, so blanks are rejected first.
+  if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Which creature a stat phrase is talking about.
+ *
+ * "its" and "this creature's" mean the card the ability is on; "target
+ * creature's" means what the ability targeted. A card that names itself is
+ * treated as "its", which is how reminder text on older cards reads.
+ */
+function statSubjectFor(phrase, { source, targets = [] }) {
+  const boardTargets = targets.filter((target) => target?.classList?.contains("board-card"));
+  const sourceName = String(source?.dataset.cardName || "").toLowerCase();
+  // An instant or sorcery has no power of its own, so "its power" on a spell
+  // can only mean the creature the spell is talking about.
+  const sourceHasStats = creatureStatValue(source, "power") !== null
+    && Boolean(source?.dataset.typeLine?.includes("Creature"));
+  const preferSource = sourceHasStats ? source : (boardTargets[0] || source);
+
+  if (/\btarget\b/.test(phrase) || /\bthat creature\b/.test(phrase)) return boardTargets[0] || source;
+  if (/\b(its|this|itself)\b/.test(phrase)) return preferSource;
+  if (sourceName && phrase.includes(sourceName)) return preferSource;
+  // Unqualified wording on a targeted ability nearly always means the target.
+  return boardTargets[0] || source;
+}
+
+/**
+ * Reads "<something>'s power" or "... toughness" out of a phrase and returns the
+ * number it stands for, or null when the phrase names no stat at all.
+ */
+function statPhraseValue(phrase, context) {
+  const match = /\b(power|toughness)\b/i.exec(String(phrase || ""));
+  if (!match) return null;
+  const subject = statSubjectFor(String(phrase).toLowerCase(), context);
+  return creatureStatValue(subject, match[1].toLowerCase());
+}
+
+/**
+ * How much damage an effect deals: a printed number, or a creature's power or
+ * toughness when the effect is written that way.
+ */
+function damageAmountFor(text, context = {}) {
+  const effect = String(text || "");
+  const literal = /\bdeals?\s+(\d+)\s+damage\b/i.exec(effect);
+  if (literal) return Number(literal[1]);
+  // "deals damage equal to its power", "equal to target creature's toughness".
+  const variable = /\bdeals?\s+damage\s+equal\s+to\s+([^.,;]+)/i.exec(effect);
+  if (!variable) return 0;
+  return statPhraseValue(variable[1], context) ?? 0;
+}
+
+function costContainsX(cost) {
+  return parseCost(cost).includes("X");
+}
+
+/**
+ * Rewrites {X} as the announced amount. {X}{X} is 2X, which is why the generic
+ * pips are summed rather than replaced one for one.
+ */
+function substituteXInCost(cost, chosenX) {
+  const symbols = parseCost(cost);
+  let generic = 0;
+  const rest = [];
+  symbols.forEach((symbol) => {
+    if (symbol === "X") generic += chosenX;
+    else if (/^\d+$/.test(symbol)) generic += Number(symbol);
+    else rest.push(symbol);
+  });
+  const coloured = rest.map((symbol) => `{${symbol}}`).join("");
+  if (!generic && coloured) return coloured;
+  return `{${generic}}${coloured}`;
+}
+
+/** "where X is the number of Islands you control" and its common relatives. */
+function definedXValue(source, text, targets = []) {
+  const definition = /\bwhere X is (?:the number of |your )?(.+?)(?:[.,]|$)/i.exec(String(text || ""));
+  if (!definition) return null;
+  const phrase = definition[1].toLowerCase();
+  const controller = source ? seatOfElement(source) : HUMAN_SEAT;
+
+  // "where X is its power" and friends read the creature's live stats.
+  const stat = statPhraseValue(phrase, { source, targets });
+  if (stat !== null) return stat;
+
+  if (/life total/.test(phrase)) return Number(seatLifeTotal(controller)?.querySelector(".life-input")?.value || 0);
+  if (/cards in your hand/.test(phrase)) {
+    return document.querySelectorAll('[data-zone="player-hand"] > .board-card').length;
+  }
+  if (/cards in your graveyard/.test(phrase)) {
+    return document.querySelectorAll('[data-zone="player-graveyard"] > .board-card').length;
+  }
+  const controlled = /you control/.test(phrase);
+  if (controlled) {
+    const type = ["creature", "artifact", "enchantment", "land", "planeswalker"]
+      .find((candidate) => phrase.includes(candidate));
+    const subtype = /\b([a-z]+)s? you control\b/.exec(phrase)?.[1];
+    return [...document.querySelectorAll(`[data-zone="${controller}-battlefield"] .board-card`)]
+      .filter((card) => {
+        const line = card.dataset.typeLine.toLowerCase();
+        if (type) return line.includes(type);
+        return subtype ? line.includes(subtype) : true;
+      }).length;
+  }
+  return null;
+}
+
+/** The number X stands for on this card right now, or null if it is unknown. */
+function resolvedXValue(source, text, targets = []) {
+  const defined = definedXValue(source, text, targets);
+  if (defined !== null) return defined;
+  const announced = Number(source?.dataset.chosenX);
+  return Number.isFinite(announced) ? announced : null;
+}
+
+/**
+ * Swaps a known X into ability text. Only a standalone X is replaced, so the
+ * Y in "+X/+X" style wording and words merely containing an x are left alone.
+ */
+function substituteXInText(text, value) {
+  if (value === null || value === undefined) return text;
+  return String(text).replace(/\bX\b/g, String(value));
+}
+
+/** Ability text with X already resolved, which is what every reader wants. */
+function textWithXResolved(source, text, targets = []) {
+  return substituteXInText(text, resolvedXValue(source, text, targets));
 }
 
 function reductionSubjectMatches(card, subject) {
@@ -3394,13 +4147,12 @@ function spendManaFor(cost) {
 }
 
 function castingPermission(typeLine) {
-  const phase = window.currentTurnPhase || "Untap";
+  const phase = window.currentTurnPhase || "Upkeep";
   if (typeLine.includes("Sorcery") && !["Main phase 1", "Main phase 2"].includes(phase)) {
     return { allowed: false, reason: `Sorceries can only be cast during Main 1 or Main 2. Current phase: ${phase}.` };
   }
-  if (typeLine.includes("Instant") && phase === "Untap") {
-    return { allowed: false, reason: "Instants cannot be cast during the untap step." };
-  }
+  // Instants are legal in every phase the board now has, upkeep included: the
+  // untap step they used to be barred from no longer exists on its own.
   return { allowed: true };
 }
 
@@ -3417,11 +4169,6 @@ function targetLabel(element) {
     return element.getAttribute("aria-label").replace(" life total", "");
   }
   return element.dataset.cardName || element.getAttribute("aria-label") || "target";
-}
-
-function fixedDamageAmount(oracleText) {
-  const match = oracleText.match(/\bdeals?\s+(\d+)\s+damage\b/i);
-  return match ? Number(match[1]) : 0;
 }
 
 function updateCreatureDamageBadge(card) {
@@ -3481,7 +4228,7 @@ function sendLethalCreatureToGraveyard(card) {
 }
 
 function applyResolvedDamage(card, targets) {
-  const damage = fixedDamageAmount(card.dataset.oracleText || "");
+  const damage = damageAmountFor(card.dataset.oracleText || "", { source: card, targets });
   if (!damage) return [];
   const results = [];
   targets.forEach((target) => {
@@ -3491,7 +4238,9 @@ function applyResolvedDamage(card, targets) {
       results.push(`${damage} damage to ${targetLabel(target)}`);
       return;
     }
-    const toughness = Number(target.dataset.baseToughness);
+    // Lethality is measured against the toughness the creature actually has,
+    // so counters and anthems keep it alive exactly as they should.
+    const toughness = creatureStatValue(target, "toughness");
     if (target.dataset.typeLine?.includes("Creature") && Number.isFinite(toughness)) {
       const totalDamage = Number(target.dataset.damageMarked || 0) + damage;
       target.dataset.damageMarked = String(totalDamage);
@@ -3544,7 +4293,10 @@ function eligibleTargetsFor(oracleText) {
 
 function triggeredAbilitiesFor(card) {
   return (card.dataset.oracleText || "").split("\n").flatMap((line) => {
-    const match = line.trim().match(/\b(When|Whenever)\s+(.+?),\s+(.+)$/i);
+    // "At the beginning of your upkeep, ..." is the other half of the triggered
+    // ability grammar; without it every phase trigger printed on a card is inert.
+    const match = line.trim().match(/\b(When|Whenever)\s+(.+?),\s+(.+)$/i)
+      || line.trim().match(/^(At)\s+(the beginning of .+?),\s+(.+)$/i);
     if (!match) return [];
     const kickedEffect = match[3].match(/^if (?:it|this spell|this creature) was kicked,\s*(.+)$/i);
     return [{
@@ -3587,11 +4339,17 @@ function triggerMatchesEvent(trigger, eventName, context) {
   if (eventName === "dies") return /\b(?:dies|die)\b/.test(condition) && typeMatches && tokenMatches && controlMatches && subjectMatches;
   if (eventName === "damage") return condition.includes("deals damage") && subjectMatches;
   if (eventName === "phase") {
+    if (!condition.includes("beginning")) return false;
     const phase = String(context.phase || "").toLowerCase();
-    return condition.includes("beginning") && (
-      condition.includes(phase.replace(" phase", "").replace(" step", ""))
-      || (phase === "end step" && condition.includes("end step"))
-    );
+    // Upkeep now covers what used to be three steps, so a card that triggers on
+    // any of them triggers here.
+    const covered = phase === "upkeep"
+      ? ["untap", "upkeep", "draw"]
+      : [phase.replace(" phase", "").replace(" step", "")];
+    if (!covered.some((step) => condition.includes(step))) return false;
+    // "your upkeep" belongs to the card's controller, not to whoever is playing.
+    if (/\byour\b/.test(condition) && sourceController !== (context.seat || sourceController)) return false;
+    return true;
   }
   return false;
 }
@@ -3737,7 +4495,25 @@ function beginActivatedAbility(source, ability, selectedPermanents = null) {
     showPermanentCostChoices(source, ability, permanentRequirement);
     return;
   }
-  const payment = payActivatedAbilityCost(source, ability.cost, selectedPermanents || []);
+  // Same announcement as casting: X is named and paid for before it does anything.
+  if (costContainsX(ability.cost) && source.dataset.chosenX === undefined) {
+    offerXChoice({
+      label: source.dataset.cardName,
+      printedCost: ability.cost,
+      onChosen: (chosen) => {
+        source.dataset.chosenX = String(chosen);
+        beginActivatedAbility(source, ability, selectedPermanents);
+      },
+    });
+    return;
+  }
+  const payment = payActivatedAbilityCost(
+    source,
+    source.dataset.chosenX !== undefined && costContainsX(ability.cost)
+      ? substituteXInCost(ability.cost, Number(source.dataset.chosenX))
+      : ability.cost,
+    selectedPermanents || [],
+  );
   if (!payment.paid) {
     showMessage(payment.reason, "error");
     return;
@@ -3910,10 +4686,13 @@ function resolveTriggeredAbility() {
       return;
     }
   }
-  const { source, effect } = activeTrigger;
+  const { source } = activeTrigger;
+  // X becomes a number here, so damage, counters and target counts downstream
+  // never have to know it was variable.
+  const effect = textWithXResolved(source, activeTrigger.effect, activeTrigger.targets);
   let { targets } = activeTrigger;
   const controller = seatOfElement(source);
-  const damage = fixedDamageAmount(effect);
+  const damage = damageAmountFor(effect, { source, targets });
   if (damage && !targets.length && /\b(each opponent|defending player)\b/i.test(effect)) {
     targets = seatsOtherThan(controller).map(seatLifeTotal).filter(Boolean);
   }
@@ -3922,7 +4701,7 @@ function resolveTriggeredAbility() {
     if (attackedTarget) targets = [attackedTarget];
   }
   const counterResults = applyPlayerCounterEffects(effect, controller, targets);
-  const stateResults = applyPermanentStateEffects(effect, controller, targets);
+  const stateResults = applyPermanentStateEffects(effect, controller, targets, source);
   void createTokensFromEffect(effect, controller);
   if (damage && targets.length) {
     const originalOracle = source.dataset.oracleText;
@@ -3960,6 +4739,7 @@ function resolveTriggeredAbility() {
       : `${source.dataset.cardName}'s ${abilityKind} resolved.`,
     "success",
   );
+  delete source.dataset.chosenX;
   activeTrigger = null;
   abilityTargetingController?.abort();
   abilityTargetingController = null;
@@ -4077,6 +4857,8 @@ function retireResolvedSpell(card) {
   delete card.dataset.lastPaidCost;
   delete card.dataset.printedCastCost;
   delete card.dataset.surgePaid;
+  // X only means anything for the casting it was announced for.
+  delete card.dataset.chosenX;
   delete card.dataset.resolutionEffectOverride;
   document.querySelector(`[data-zone="${destination}"]`).append(card);
   card.hidden = false;
@@ -4113,7 +4895,7 @@ function resolveActiveSpell() {
     return;
   }
   const counterResults = applyPlayerCounterEffects(effectText, "player", targetElements);
-  const stateResults = applyPermanentStateEffects(effectText, "player", targetElements);
+  const stateResults = applyPermanentStateEffects(effectText, "player", targetElements, card);
   const originalOracleText = card.dataset.oracleText;
   card.dataset.oracleText = effectText;
   const damageResults = applyResolvedDamage(card, targetElements);
@@ -4190,6 +4972,45 @@ function finishCardCast(cardElement, target, castingWithFlashback = false, alter
   resolvePermanent(cardElement, document.querySelector('[data-zone="player-battlefield"]'));
 }
 
+/**
+ * Announcing X. The player names a value, the bar shows what that will actually
+ * cost, and paying substitutes it into the cost before any mana moves.
+ */
+function offerXChoice({ label, printedCost, onChosen }) {
+  pendingXChoice = { printedCost, onChosen };
+  const describe = () => {
+    const chosen = Math.max(0, Math.trunc(Number(xValueInput.value) || 0));
+    abilityCostBarCopy.textContent = `${printedCost} becomes ${substituteXInCost(printedCost, chosen)}.`;
+  };
+  abilityCostBar.hidden = false;
+  abilityCostBar.querySelector("strong").textContent = `Choose X for ${label}`;
+  xValueField.hidden = false;
+  xValueInput.value = "1";
+  describe();
+  xValueInput.oninput = describe;
+  payPermanentCostButton.hidden = false;
+  payPermanentCostButton.disabled = false;
+  payPermanentCostButton.textContent = "Pay";
+  cancelPermanentCostButton.textContent = "Cancel";
+  window.setTimeout(() => xValueInput.focus(), 80);
+}
+
+function closeXChoice() {
+  pendingXChoice = null;
+  xValueField.hidden = true;
+  xValueInput.oninput = null;
+  abilityCostBar.hidden = true;
+  cancelPermanentCostButton.textContent = "Cancel";
+}
+
+function confirmXChoice() {
+  if (!pendingXChoice) return;
+  const { onChosen } = pendingXChoice;
+  const chosen = Math.max(0, Math.trunc(Number(xValueInput.value) || 0));
+  closeXChoice();
+  onChosen(chosen);
+}
+
 function offerKickerChoice(cardElement, target, kickerCost) {
   pendingKickerCast = { cardElement, target, kickerCost };
   const combinedCost = combinedManaCosts(cardElement.dataset.manaCost, kickerCost);
@@ -4258,6 +5079,18 @@ function castCardByDrop(cardElement, target) {
     offerSurgeChoice(cardElement, target, surgeCost, castingWithFlashback);
     return;
   }
+  // A cost with {X} in it cannot be paid until the player says what X is.
+  if (costContainsX(cardElement.dataset.manaCost) && !castingWithFlashback) {
+    offerXChoice({
+      label: cardElement.dataset.cardName,
+      printedCost: cardElement.dataset.manaCost,
+      onChosen: (chosen) => {
+        cardElement.dataset.chosenX = String(chosen);
+        finishCardCast(cardElement, target, false, substituteXInCost(cardElement.dataset.manaCost, chosen));
+      },
+    });
+    return;
+  }
   finishCardCast(cardElement, target, castingWithFlashback);
 }
 
@@ -4270,7 +5103,9 @@ function refreshCardState(element) {
   const inGraveyard = zone.endsWith("-graveyard") || zone.endsWith("-exile");
   const isLand = element.dataset.typeLine.includes("Land");
   const manaTypes = JSON.parse(element.dataset.producedMana || "[]");
+  migrateLegacyCounters(element);
   updateStunCounterBadge(element);
+  renderCounterChips(element);
   updateKeywordBadge(element);
   element.classList.toggle(
     "has-activated-ability",
@@ -4362,6 +5197,9 @@ function resolvePermanent(card, battlefield) {
   spellStack.hidden = true;
   spellStackBackdrop.hidden = true;
   document.body.classList.remove("resolving-spell");
+  // Before the append, so the permanent never exists on the battlefield without
+  // the counters it enters carrying.
+  const enteredWith = applyEntersWithCounters(card);
   battlefield.append(card);
   card.classList.remove("awaiting-placement", "pointer-dragging", "selected-for-resolution");
   card.classList.add("permanent-resolved");
@@ -4377,11 +5215,16 @@ function resolvePermanent(card, battlefield) {
     badge.title = "This creature cannot attack until your next turn.";
     card.append(badge);
   }
-  showMessage(`${card.dataset.cardName} resolved onto the battlefield.`, "success");
+  showMessage(enteredWith
+    ? `${card.dataset.cardName} entered the battlefield with ${enteredWith}.`
+    : `${card.dataset.cardName} resolved onto the battlefield.`, "success");
   window.setTimeout(() => card.classList.remove("permanent-resolved"), 650);
   refreshCardState(card);
+  // Now that it is on the battlefield, its counters can feed its stats.
+  if (enteredWith) recalculateStaticAbilities();
   delete card.dataset.lastPaidCost;
   delete card.dataset.printedCastCost;
+  delete card.dataset.chosenX;
   emitGameEvent("permanent-enter", { card });
   delete card.dataset.kicked;
   delete card.dataset.surgePaid;
@@ -4634,6 +5477,31 @@ function renderResults(cards) {
   });
 }
 
+/* ---------------------------------------------------------------------------
+ * Alchemy rebalances
+ *
+ * Scryfall returns Arena's rebalanced cards next to the originals: the same card
+ * under an "A-" name with an "A-" collector number. On a board that models paper
+ * Magic they are duplicates that make every search twice as long to read, so
+ * they are filtered out — unless the search asks for them by name.
+ * ------------------------------------------------------------------------- */
+
+const ALCHEMY_PREFIX = /^A-/i;
+
+function isAlchemyRebalance(card) {
+  return ALCHEMY_PREFIX.test(card?.name || "") || ALCHEMY_PREFIX.test(card?.collector_number || "");
+}
+
+/**
+ * Scryfall knows these as `is:rebalanced`, which is cheaper and more reliable
+ * than sifting the response. The author's own query is parenthesised so that an
+ * `or` inside it keeps its scope instead of swallowing the exclusion.
+ */
+function scryfallQueryFor(query) {
+  if (/\b(rebalanced|alchemy)\b/i.test(query)) return query;
+  return `(${query}) -is:rebalanced`;
+}
+
 async function searchCards(event) {
   event.preventDefault();
   const query = importer.query.value.trim();
@@ -4642,14 +5510,19 @@ async function searchCards(event) {
   importer.results.replaceChildren();
   try {
     const url = new URL(SCRYFALL_SEARCH_URL);
-    url.searchParams.set("q", query);
+    url.searchParams.set("q", scryfallQueryFor(query));
     url.searchParams.set("unique", "cards");
     url.searchParams.set("order", "name");
     const response = await fetch(url, { headers: { Accept: "application/json;q=0.9,*/*;q=0.8" } });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.details || "Scryfall could not complete that search.");
-    renderResults(payload.data);
-    importer.status.textContent = `${payload.total_cards} result${payload.total_cards === 1 ? "" : "s"}. Choose a card to place it.`;
+    // Second pass over what came back, in case a rebalance slipped the predicate.
+    const cards = (payload.data || []).filter((card) => !isAlchemyRebalance(card));
+    const total = Math.max(cards.length, payload.total_cards - ((payload.data?.length || 0) - cards.length));
+    renderResults(cards);
+    importer.status.textContent = cards.length
+      ? `${total} result${total === 1 ? "" : "s"}. Choose a card to place it.`
+      : "No results. Try a different search.";
   } catch (error) {
     importer.status.textContent = error.message || "Unable to reach Scryfall. Please try again.";
   }
@@ -4676,8 +5549,10 @@ document.addEventListener("team:spellcast", recordAlliedSpellCast);
 document.addEventListener("turn:phasechange", (event) => {
   closeManaChoicePrompt();
   clearAiTurnTimer();
+  closeUpkeepPrompt();
   paintSeatTurnMarkers();
-  emitGameEvent("phase", { phase: event.detail.phase });
+  // Queues any "at the beginning of ..." triggers before anyone gets to act.
+  emitGameEvent("phase", { phase: event.detail.phase, seat: event.detail.seat });
   if (event.detail.phase === "End step") resolveEndStepDelayedEffects();
   if (event.detail.phase === "Combat phase") beginCombatDeclaration();
   else {
@@ -4685,11 +5560,23 @@ document.addEventListener("turn:phasechange", (event) => {
   }
   // A computer seat plays its own turn out; the human drives their own.
   const seatId = activeSeat();
-  if (isAiSeat(seatId) && !editingMode) runAiPhase(seatId, event.detail.phase);
+  if (isAiSeat(seatId) && !editingMode) {
+    runAiPhase(seatId, event.detail.phase);
+    return;
+  }
+  // Only an upkeep the player actually stepped into asks them anything; one
+  // restored by loading a board leaves them where the author put them.
+  if (event.detail.phase === "Upkeep" && event.detail.advanced && !editingMode) {
+    handleUpkeepEntered();
+  }
 });
 resolveSpellButton.addEventListener("click", resolveActiveSpell);
 resolveTriggerButton.addEventListener("click", resolveTriggeredAbility);
 payPermanentCostButton.addEventListener("click", () => {
+  if (pendingXChoice) {
+    confirmXChoice();
+    return;
+  }
   if (pendingEffectChoice) {
     applyPendingEffectChoice(0);
     return;
@@ -4717,6 +5604,11 @@ payPermanentCostButton.addEventListener("click", () => {
   beginActivatedAbility(pendingAbilityPayment.source, pendingAbilityPayment.ability, [...pendingAbilityPayment.selected]);
 });
 cancelPermanentCostButton.addEventListener("click", () => {
+  if (pendingXChoice) {
+    closeXChoice();
+    showMessage("Cancelled — no value announced for X.", "error");
+    return;
+  }
   if (pendingEffectChoice) {
     applyPendingEffectChoice(1);
     return;
@@ -4775,7 +5667,25 @@ document.addEventListener("keydown", (event) => {
       return;
     }
   }
+  // Counters are useful while playing as well as while authoring, so unlike T
+  // this is not gated on edit mode.
+  if (event.key.toLowerCase() === "c" && !event.metaKey && !event.ctrlKey
+      && !event.target?.matches?.("input, textarea")) {
+    const card = document.activeElement?.closest?.(".board-card") || hoveredBoardCard;
+    // Counters belong on permanents in play; an author may put them anywhere.
+    const zone = card?.parentElement?.dataset.zone || "";
+    if (card && (editingMode || zone.endsWith("-battlefield"))) {
+      event.preventDefault();
+      if (counterManager.hidden) openCounterManager(card);
+      else targetCounterManager(card);
+      return;
+    }
+  }
   if (event.key !== "Escape") return;
+  if (!counterManager.hidden) {
+    closeCounterManager();
+    return;
+  }
   if (pendingManaChoice) {
     closeManaChoicePrompt();
     return;
@@ -4794,12 +5704,21 @@ document.addEventListener("keydown", (event) => {
   }
   // Ahead of the publish dialog: the preview opens on top of it, so Escape has
   // to peel the instructions off first rather than close both at once.
+  // Escaping the upkeep prompt means "let me act", the non-destructive answer.
+  if (!upkeepPrompt.hidden) {
+    stayInUpkeep();
+    return;
+  }
   if (!instructionsDialog.hidden) {
     closeInstructions();
     return;
   }
   if (!publishDialog.hidden) {
     closePublishDialog();
+    return;
+  }
+  if (!deployDialog.hidden) {
+    closeDeployDialog();
     return;
   }
   if (!archiveDrawer.hidden) {
@@ -4880,6 +5799,37 @@ closePublishButton.addEventListener("click", closePublishDialog);
 cancelPublishButton.addEventListener("click", closePublishDialog);
 publishBackdrop.addEventListener("click", closePublishDialog);
 publishForm.addEventListener("submit", submitPublish);
+
+// While authoring with the panel open, clicking any card retargets it. Capture
+// phase so this beats the board's own click handling for the card.
+document.addEventListener("click", (event) => {
+  if (counterManager.hidden || !editingMode) return;
+  if (event.target.closest(".counter-manager")) return;
+  // A card waiting to be placed owns the next click — dropping it into a zone
+  // matters more than retargeting this panel.
+  if (selectedCard || selectedPermanent) return;
+  const card = event.target.closest(".board-card");
+  if (!card) return;
+  event.preventDefault();
+  event.stopPropagation();
+  targetCounterManager(card);
+}, { capture: true });
+
+closeCounterManagerButton.addEventListener("click", closeCounterManager);
+counterManagerBackdrop.addEventListener("click", closeCounterManager);
+counterSearchInput.addEventListener("input", renderCounterSearchResults);
+counterSearchForm.addEventListener("submit", (event) => event.preventDefault());
+
+upkeepActButton.addEventListener("click", stayInUpkeep);
+upkeepPassButton.addEventListener("click", passUpkeep);
+// No backdrop dismissal: the prompt is a question with two real answers, and
+// clicking past it would leave the player unsure which one they gave.
+
+deployTrigger.addEventListener("click", openDeployDialog);
+closeDeployButton.addEventListener("click", closeDeployDialog);
+cancelDeployButton.addEventListener("click", closeDeployDialog);
+deployBackdrop.addEventListener("click", closeDeployDialog);
+deployForm.addEventListener("submit", submitDeploy);
 
 resetPuzzleButton.addEventListener("click", resetPuzzle);
 // Arming Reset must not outlive the player's attention on it.

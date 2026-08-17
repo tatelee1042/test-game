@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=74" />
+    <link rel="stylesheet" href="styles.css?v=82" />
   </head>
   <body>
     <main class="game-board" data-seat-count="2" aria-label="Magic puzzle board">
@@ -67,9 +67,8 @@
       <nav class="turn-divider" aria-label="Turn phases">
         <p class="active-seat-banner"><span class="active-seat-label">Your turn</span> · Turn <span class="active-turn-number">1</span></p>
         <ol class="phase-list">
-          <li class="phase-step active" aria-current="step">Untap</li>
-          <li class="phase-step">Upkeep</li>
-          <li class="phase-step">Draw</li>
+          <!-- Untap, upkeep and draw run as one step: see turnPhases below. -->
+          <li class="phase-step active" aria-current="step">Upkeep</li>
           <li class="phase-step">Main 1</li>
           <li class="phase-step">Combat</li>
           <li class="phase-step">Main 2</li>
@@ -158,6 +157,7 @@
         <button class="add-seat" type="button" disabled><span aria-hidden="true">👤</span> Add opponent</button>
         <button class="save-manager-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▣</span> Save / Load</button>
         <button class="publish-trigger" type="button" aria-haspopup="dialog" disabled><span aria-hidden="true">▲</span> Publish puzzle</button>
+        <button class="deploy-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">☁</span> Push live</button>
         <button class="clear-board" type="button" disabled><span aria-hidden="true">⌫</span> Clear board</button>
       </div>
     </div>
@@ -212,6 +212,32 @@
         </div>
       </form>
     </aside>
+    <!-- Authoring only. Commits puzzles/ and pushes it; the deployed site has no
+         endpoint behind this and never renders the button that opens it. -->
+    <div class="deploy-backdrop" hidden></div>
+    <aside class="deploy-dialog" role="dialog" aria-modal="true" aria-labelledby="deploy-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Commit and push</p>
+          <h2 id="deploy-title">Push live</h2>
+        </div>
+        <button class="close-deploy" type="button" aria-label="Close push live">×</button>
+      </header>
+      <p class="deploy-branch" role="status"></p>
+      <div class="deploy-pending"></div>
+      <form class="deploy-form">
+        <label class="publish-field">
+          <span>Message</span>
+          <input type="text" name="message" maxlength="120" autocomplete="off" placeholder="Update puzzles" />
+        </label>
+        <p class="deploy-status" role="status"></p>
+        <div class="publish-actions">
+          <button type="submit" class="confirm-deploy">Commit &amp; push</button>
+          <button type="button" class="cancel-deploy">Cancel</button>
+        </div>
+      </form>
+    </aside>
+
     <!-- Opens by itself whenever a puzzle that carries instructions is loaded,
          and again from the Instructions button in the puzzle bar. -->
     <div class="instructions-backdrop" hidden></div>
@@ -229,7 +255,44 @@
       </div>
     </aside>
 
-    <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus any battlefield card and press T to tap</div>
+    <!-- Shown on entering your upkeep, but only when there is actually something
+         you could do with it. An empty upkeep passes on its own. -->
+    <div class="upkeep-backdrop" hidden></div>
+    <aside class="upkeep-prompt" role="dialog" aria-modal="true" aria-labelledby="upkeep-prompt-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">Beginning of your turn</p>
+          <h2 id="upkeep-prompt-title">Anything in your upkeep?</h2>
+        </div>
+      </header>
+      <!-- Deliberately does not list what is available: finding the line is the
+           puzzle, so the prompt only says that one exists. -->
+      <p class="upkeep-copy">There is something you could do before your main phase.</p>
+      <div class="upkeep-actions">
+        <button type="button" class="upkeep-act">Let me act</button>
+        <button type="button" class="upkeep-pass">Pass to Main 1</button>
+      </div>
+    </aside>
+
+    <!-- Counters on one permanent. Opened with C over any card on a battlefield. -->
+    <div class="counter-manager-backdrop" hidden></div>
+    <aside class="counter-manager" role="dialog" aria-modal="true" aria-labelledby="counter-manager-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow counter-manager-card">Permanent</p>
+          <h2 id="counter-manager-title">Counters</h2>
+        </div>
+        <button class="close-counter-manager" type="button" aria-label="Close counters">×</button>
+      </header>
+      <div class="counter-current" aria-label="Counters on this permanent"></div>
+      <form class="counter-search" role="search">
+        <label for="counter-query" class="counter-search-label">Add a counter</label>
+        <input id="counter-query" name="query" type="search" placeholder="+1/+1, stun, charge…" autocomplete="off" />
+      </form>
+      <div class="counter-results" aria-label="Counter kinds"></div>
+    </aside>
+
+    <div class="edit-mode-banner" role="status" hidden>Editing mode · Hover or focus any battlefield card, then T to tap or C for counters</div>
     <div class="drawer-backdrop" hidden></div>
     <aside class="card-drawer" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-hidden="true">
       <header class="drawer-header">
@@ -333,6 +396,11 @@
     <div class="ability-cost-bar" role="status" hidden>
       <strong>Choose a permanent</strong>
       <span></span>
+      <!-- Only shown while announcing X for a cost that contains {X}. -->
+      <label class="x-value-field" hidden>
+        <span>X =</span>
+        <input class="x-value-input" type="number" min="0" max="99" step="1" value="1" aria-label="Value for X" />
+      </label>
       <button class="pay-permanent-cost" type="button" disabled>Pay cost</button>
       <button class="cancel-permanent-cost" type="button">Cancel</button>
     </div>
@@ -388,10 +456,15 @@
       </div>
     </aside>
 
-    <script src="storage.js?v=74" defer></script>
-    <script src="app.js?v=74" defer></script>
+    <script src="counters.js?v=82" defer></script>
+    <script src="storage.js?v=82" defer></script>
+    <script src="app.js?v=82" defer></script>
     <script>
-      const turnPhases = ["Untap", "Upkeep", "Draw", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
+      // Untap, upkeep and draw are one step on this board: nothing in the engine
+      // ever needed them apart, and folding them together removes two clicks the
+      // player could do nothing with. Boards saved under the old names still load.
+      const turnPhases = ["Upkeep", "Main phase 1", "Combat phase", "Main phase 2", "End step"];
+      const LEGACY_PHASE_NAMES = { Untap: "Upkeep", Draw: "Upkeep", "Draw step": "Upkeep" };
       const turnPhaseSteps = [...document.querySelectorAll(".phase-step")];
       const activeSeatLabel = document.querySelector(".active-seat-label");
       const activeTurnNumberLabel = document.querySelector(".active-turn-number");
@@ -401,7 +474,10 @@
       // the turn passes; before it loads there is only ever the human seat.
       let activeSeatId = "player";
 
-      function paintActivePhase() {
+      // `advanced` marks a phase the player stepped into with the Next phase
+      // button, as opposed to one restored by loading a board. Only the former
+      // should trigger the upkeep prompt.
+      function paintActivePhase({ advanced = false } = {}) {
         window.currentTurnPhase = turnPhases[activePhaseIndex];
         window.currentTurnNumber = activeTurnNumber;
         window.currentTurnSeat = activeSeatId;
@@ -418,12 +494,12 @@
         activeSeatLabel.textContent = window.seatTurnLabel?.(activeSeatId) || "Your turn";
         activeTurnNumberLabel.textContent = String(activeTurnNumber);
         document.dispatchEvent(new CustomEvent("turn:phasechange", {
-          detail: { phase: window.currentTurnPhase, seat: activeSeatId },
+          detail: { phase: window.currentTurnPhase, seat: activeSeatId, advanced },
         }));
       }
 
       window.setTurnState = (phase, turnNumber = 1, seat = "player") => {
-        const phaseIndex = turnPhases.indexOf(phase);
+        const phaseIndex = turnPhases.indexOf(LEGACY_PHASE_NAMES[phase] || phase);
         if (phaseIndex < 0) return;
         activePhaseIndex = phaseIndex;
         activeTurnNumber = Math.max(1, Number(turnNumber) || 1);
@@ -449,7 +525,7 @@
           window.currentTurnSeat = activeSeatId;
           document.dispatchEvent(new CustomEvent("turn:untap", { detail: { seat: activeSeatId } }));
         }
-        paintActivePhase();
+        paintActivePhase({ advanced: true });
         const status = document.querySelector(".game-message");
         status.textContent = `Advanced to ${turnPhases[activePhaseIndex]}.`;
         status.dataset.tone = "success";
