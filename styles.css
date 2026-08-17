@@ -362,15 +362,39 @@ h2 {
   border-color: var(--gold);
 }
 
+/* Every seat is one grid, two columns: the battlefield and hand share one
+   column, and the card piles take the other for the full height of both.
+   `display: contents` dissolves this wrapper so the battlefield and the piles
+   become items of the seat's own grid — which is what lets the piles span the
+   hand's row and fill the width the hand no longer uses. */
 .play-area {
-  display: grid;
-  grid-template-columns: 122px minmax(0, 1fr);
-  min-height: 0;
-  gap: 9px;
+  display: contents;
 }
 
-.player .play-area {
-  grid-template-columns: minmax(0, 1fr) 122px;
+.player .battlefield-shell {
+  grid-row: 1;
+}
+
+.player .hand-zone {
+  grid-row: 2;
+}
+
+.player .player-bar {
+  grid-row: 3;
+  grid-column: 1 / -1;
+}
+
+/* Library, graveyard and exile in one column, each the same height. */
+.player .card-piles {
+  grid-row: 1 / span 2;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+.player .card-piles .library,
+.player .card-piles .graveyard-zone,
+.player .card-piles .exile-zone {
+  grid-row: auto;
 }
 
 .battlefield-shell {
@@ -391,9 +415,7 @@ h2 {
   text-transform: uppercase;
 }
 
-.player .battlefield-heading {
-  text-align: right;
-}
+
 
 .card-piles {
   display: grid;
@@ -402,14 +424,33 @@ h2 {
   gap: 5px;
 }
 
-.opponent .card-piles .library,
-.player .card-piles .library { grid-row: 1 / span 2; }
-.opponent .card-piles .library { grid-column: 2; }
-.player .card-piles .library { grid-column: 1; }
-.opponent .card-piles .graveyard-zone,
-.opponent .card-piles .exile-zone { grid-column: 1; }
-.player .card-piles .graveyard-zone,
-.player .card-piles .exile-zone { grid-column: 2; }
+/* An opponent seat runs the other way up — bar, hand, then battlefield — so its
+   piles take the outer column across the hand and battlefield rows. */
+.opponent .player-bar {
+  grid-row: 1;
+  grid-column: 1 / -1;
+}
+
+.opponent .hand-zone {
+  grid-row: 2;
+}
+
+.opponent .battlefield-shell {
+  grid-row: 3;
+}
+
+.opponent .card-piles {
+  grid-row: 2 / span 2;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+/* Ordered so the library sits nearest the battlefield, as it does on your side.
+   The template's DOM order is graveyard, exile, library, so the rows are named
+   rather than left to flow. */
+.opponent .card-piles .exile-zone { grid-row: 1; }
+.opponent .card-piles .graveyard-zone { grid-row: 2; }
+.opponent .card-piles .library { grid-row: 3; }
 
 .zone,
 .battlefield-zone,
@@ -611,10 +652,11 @@ h2 {
   gap: 6px;
 }
 
-.game-board[data-seat-count="3"] .ai-seat .play-area,
-.game-board[data-seat-count="4"] .ai-seat .play-area {
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 6px;
+/* Half-width seats get a narrower pile column; the side it sits on is decided
+   above, so only the track size changes here. */
+.game-board[data-seat-count="3"] .ai-seat,
+.game-board[data-seat-count="4"] .player-side {
+  --pile-column: 96px;
 }
 
 .game-board[data-seat-count="3"] .ai-seat .player-bar,
@@ -629,9 +671,90 @@ h2 {
 }
 
 /*
- * Every opponent seat is laid out the same way regardless of which corner it
- * sits in — piles inboard, battlefield outboard — so the three read as one set.
+ * Which edge a seat's card piles hug.
+ *
+ * The board is a two-by-two of corners. Piles go against the outer edge of the
+ * screen — left for the seats in the left column, right for the seats in the
+ * right column — which pushes every battlefield toward the middle, so all of
+ * them line up around the centre of the screen instead of each sitting at a
+ * different offset.
+ *
+ * Rows are set per side (.player counts up from the battlefield, .opponent
+ * counts down from the hand); only the column depends on the corner.
  */
+.player-side {
+  --pile-column: 152px;
+}
+
+.player,
+.ai-seat[data-seat-slot="1"] {
+  grid-template-columns: var(--pile-column) minmax(0, 1fr);
+}
+
+.player .battlefield-shell,
+.player .hand-zone,
+.ai-seat[data-seat-slot="1"] .battlefield-shell,
+.ai-seat[data-seat-slot="1"] .hand-zone {
+  grid-column: 2;
+}
+
+.player .card-piles,
+.ai-seat[data-seat-slot="1"] .card-piles {
+  grid-column: 1;
+}
+
+.ai-seat[data-seat-slot="2"],
+.ai-seat[data-seat-slot="3"] {
+  grid-template-columns: minmax(0, 1fr) var(--pile-column);
+}
+
+.ai-seat[data-seat-slot="2"] .battlefield-shell,
+.ai-seat[data-seat-slot="2"] .hand-zone,
+.ai-seat[data-seat-slot="3"] .battlefield-shell,
+.ai-seat[data-seat-slot="3"] .hand-zone {
+  grid-column: 1;
+}
+
+.ai-seat[data-seat-slot="2"] .card-piles,
+.ai-seat[data-seat-slot="3"] .card-piles {
+  grid-column: 2;
+}
+
+/*
+ * The bottom-right opponent shares a row with you, so it stacks the way your
+ * side does rather than the way the top seats do: battlefield against the
+ * centre line, hand below it beside yours, nametag along the bottom edge next
+ * to yours. With its piles already on the right, the seat reads as your own
+ * side reflected across the middle of the board.
+ */
+.ai-seat[data-seat-slot="3"] {
+  grid-template-rows: minmax(0, 1fr) 68px auto;
+  background: linear-gradient(0deg, rgba(78, 19, 23, 0.24), transparent 72%);
+}
+
+.ai-seat[data-seat-slot="3"] .battlefield-shell {
+  grid-row: 1;
+}
+
+.ai-seat[data-seat-slot="3"] .hand-zone {
+  grid-row: 2;
+  /* Square, like yours. The fanned edge belongs to the seats along the top. */
+  border-radius: 7px;
+}
+
+.ai-seat[data-seat-slot="3"] .player-bar {
+  grid-row: 3;
+}
+
+.ai-seat[data-seat-slot="3"] .card-piles {
+  grid-row: 1 / span 2;
+}
+
+/* Library nearest the battlefield, which for this seat is back at the top. */
+.ai-seat[data-seat-slot="3"] .card-piles .library { grid-row: 1; }
+.ai-seat[data-seat-slot="3"] .card-piles .graveyard-zone { grid-row: 2; }
+.ai-seat[data-seat-slot="3"] .card-piles .exile-zone { grid-row: 3; }
+
 
 .phase-list {
   position: relative;
@@ -3189,21 +3312,18 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
     grid-template-rows: auto 56px minmax(0, 1fr);
   }
 
-  .player {
+  /* One knob for the pile column; which side it sits on is decided elsewhere. */
+  .player-side {
+    --pile-column: 98px;
+  }
+
+  .player,
+  .ai-seat[data-seat-slot="3"] {
     grid-template-rows: minmax(0, 1fr) 56px auto;
   }
 
   .hand-zone:has(.board-card) {
     --hand-card-visible-height: 51px;
-  }
-
-  .play-area,
-  .player .play-area {
-    grid-template-columns: 82px minmax(0, 1fr);
-  }
-
-  .player .play-area {
-    grid-template-columns: minmax(0, 1fr) 82px;
   }
 
   .card-piles {
