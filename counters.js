@@ -344,9 +344,13 @@ function parseCounterInstructions(text) {
   String(text || "").replace(COUNTER_INSTRUCTION, (_match, verb, amount, kindName, preposition, subject) => {
     const kind = NAME_TO_KIND.get(String(kindName).toLowerCase());
     if (!kind) return _match;
-    // "on target creature for each Goblin you control" is a subject plus a
-    // multiplier. The board resolves the tail; this only has to split them.
-    const [rawSubject, ...forEachParts] = String(subject).split(/\bfor each\b/i);
+    // Only this clause is ours. "Put a burden counter on The One Ring, then
+    // draw a card for each burden counter on it" has a "for each" that belongs
+    // to the draw, not to the counter — reading it as a multiplier would scale
+    // the counter by a count that starts at zero, so none would ever be placed.
+    const clause = String(subject).split(/,|\bthen\b/i)[0];
+    // What remains is a subject plus, possibly, its own multiplier.
+    const [rawSubject, ...forEachParts] = clause.split(/\bfor each\b/i);
     instructions.push({
       action: /^remove/i.test(verb) || preposition.toLowerCase() === "from" ? "remove" : "put",
       kind,
