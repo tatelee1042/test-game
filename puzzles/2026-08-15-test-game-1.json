@@ -5,7 +5,7 @@
   "notes": "goblin",
   "instructions": "This is a test. Kill the opponent before your their next turn.",
   "state": {
-    "savedAt": "2026-08-16T18:56:37.876Z",
+    "savedAt": "2026-08-17T00:52:44.549Z",
     "phase": "Untap",
     "turnNumber": 1,
     "turnSeat": "player",
