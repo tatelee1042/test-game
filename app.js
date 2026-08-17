@@ -1531,6 +1531,32 @@ function adjustCardCounter(card, kind, delta) {
   return Number(written[kind] || 0);
 }
 
+/**
+ * Keyword counters hand their keyword to the permanent they sit on: a creature
+ * with a flying counter has flying, for as long as the counter is there. The
+ * catalog's display name is the keyword ("First strike" -> "first strike"),
+ * which is the form the keyword library and cardHasKeyword both use.
+ */
+function keywordCounterGrants(card) {
+  return Object.entries(readCardCounters(card))
+    .filter(([kind, count]) => count > 0 && window.CounterCatalog?.categoryOf(kind) === "keyword")
+    .map(([kind]) => window.CounterCatalog.label(kind).toLowerCase());
+}
+
+/**
+ * A shield counter stands in for the next damage or destruction: the counter is
+ * removed and nothing else happens (CR 122.1). Returns true when it absorbed
+ * the event, so the caller stops there.
+ */
+function shieldAbsorbs(card, description = "damage") {
+  if (cardCounterCount(card, "shield") <= 0) return false;
+  adjustCardCounter(card, "shield", -1);
+  card.classList.add("shield-absorbed");
+  window.setTimeout(() => card.classList.remove("shield-absorbed"), 520);
+  showMessage(`${card.dataset.cardName}'s shield counter absorbed the ${description}.`, "success");
+  return true;
+}
+
 /** Net stat change from every ±X/±Y counter a card is carrying. */
 function powerCounterTotals(card) {
   return Object.entries(readCardCounters(card)).reduce((total, [kind, count]) => {
@@ -2039,7 +2065,8 @@ function recalculateStaticAbilities() {
       card.dataset.currentPower = String(Number(card.dataset.basePower || 0) + counterStats.power);
       card.dataset.currentToughness = String(Number(card.dataset.baseToughness || 0) + counterStats.toughness);
     }
-    card.dataset.grantedKeywords = "[]";
+    // Keyword counters are the starting point; anthems and pumps add to this.
+    card.dataset.grantedKeywords = JSON.stringify(keywordCounterGrants(card));
     card.classList.remove("static-modified");
     card.querySelector(".static-stats-badge")?.remove();
     card.querySelector(".plus-counter-badge")?.remove();
@@ -2415,6 +2442,7 @@ function adjustPlayerLife(who, delta) {
 /** Marks damage on a creature and records whether deathtouch/toughness made it lethal. */
 function markCombatDamage(source, target, amount, state) {
   if (amount <= 0) return;
+  if (shieldAbsorbs(target, "combat damage")) return;
   target.dataset.damageMarked = String(Number(target.dataset.damageMarked || 0) + amount);
   updateCreatureDamageBadge(target);
   const { toughness } = creatureCombatStats(target);
@@ -4238,6 +4266,7 @@ function applyResolvedDamage(card, targets) {
       results.push(`${damage} damage to ${targetLabel(target)}`);
       return;
     }
+    if (shieldAbsorbs(target)) return;
     // Lethality is measured against the toughness the creature actually has,
     // so counters and anthems keep it alive exactly as they should.
     const toughness = creatureStatValue(target, "toughness");
