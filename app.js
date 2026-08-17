@@ -2471,6 +2471,80 @@ function adjustPlayerLife(who, delta) {
   input.value = String(Math.max(0, Number(input.value || 0) + delta));
 }
 
+/* ---------------------------------------------------------------------------
+ * Damage to a player, and loss of life
+ *
+ * These land on the life total the same way and differ in one respect that
+ * matters: damage can be prevented, loss of life cannot. A player who cannot
+ * be dealt damage still loses life to "each opponent loses 3 life", which is
+ * exactly why cards are worded that way.
+ *
+ * They are separate functions rather than one with a flag so the distinction
+ * is structural. Anything that prevents damage is wired into dealDamageToSeat
+ * and can never accidentally reach loseLife.
+ * ------------------------------------------------------------------------- */
+
+/** True while a permanent that seat controls says damage to them is prevented. */
+function seatPreventsDamage(seatId) {
+  return [...document.querySelectorAll(`[data-zone="${seatId}-battlefield"] .board-card`)]
+    .some((card) => staticAbilityLines(card).some((line) => (
+      /\byou can'?t be dealt damage\b/i.test(line)
+      || /\bprevent all damage that would be dealt to you\b/i.test(line)
+    )));
+}
+
+/**
+ * Damage to a player. Respects prevention, and reports what actually happened
+ * so a caller can say so rather than assuming the life total moved.
+ */
+function dealDamageToSeat(seatId, amount) {
+  if (amount <= 0) return { applied: 0, prevented: false };
+  if (seatPreventsDamage(seatId)) return { applied: 0, prevented: true };
+  adjustPlayerLife(seatId, -amount);
+  return { applied: amount, prevented: false };
+}
+
+/**
+ * Loss of life. Never consults prevention: losing life is not damage, so
+ * nothing that stops damage stops this.
+ */
+function loseLife(seatId, amount) {
+  if (amount <= 0) return 0;
+  adjustPlayerLife(seatId, -amount);
+  return amount;
+}
+
+/** Who a "loses N life" clause is aimed at. */
+function lifeLossRecipients(effect, controller, targets) {
+  const recipients = new Set();
+  if (/\beach opponent\b/i.test(effect)) seatsOtherThan(controller).forEach((seat) => recipients.add(seat));
+  if (/\beach player\b/i.test(effect)) seatIds().forEach((seat) => recipients.add(seat));
+  if (/\byou lose\b/i.test(effect)) recipients.add(controller);
+  targets.filter((target) => target?.classList?.contains("life-total"))
+    .forEach((target) => recipients.add(seatOfElement(target)));
+  // "Target opponent loses 2 life" with nothing chosen still has one obvious
+  // reading at a two-player table.
+  if (!recipients.size && /\btarget (?:player|opponent)\b/i.test(effect)) {
+    seatsOtherThan(controller).forEach((seat) => recipients.add(seat));
+  }
+  return [...recipients];
+}
+
+/**
+ * Applies every "loses N life" clause in an effect. Separate from the damage
+ * path on purpose — see the note above.
+ */
+function applyLifeLossEffects(effect, controller, targets = [], source = null) {
+  const match = /\bloses?\s+(\d+)\s+life\b/i.exec(String(effect || ""));
+  if (!match) return [];
+  const amount = Number(match[1]) * forEachMultiplier(effect, { source, targets, controller });
+  if (!amount) return [];
+  return lifeLossRecipients(effect, controller, targets).map((seatId) => {
+    loseLife(seatId, amount);
+    return `${seatSubject(seatId)} lost ${amount} life`;
+  });
+}
+
 /** Marks damage on a creature and records whether deathtouch/toughness made it lethal. */
 function markCombatDamage(source, target, amount, state) {
   if (amount <= 0) return;
@@ -2576,8 +2650,10 @@ function resolveCombatDamage(blocks) {
     });
   });
 
+  const preventedSeats = [];
   Object.entries(damageBySeat).forEach(([who, amount]) => {
-    if (amount > 0) adjustPlayerLife(who, -amount);
+    if (amount <= 0) return;
+    if (dealDamageToSeat(who, amount).prevented) preventedSeats.push(who);
   });
   Object.entries(state.lifeGain).forEach(([who, amount]) => {
     if (amount > 0) adjustPlayerLife(who, amount);
@@ -2595,7 +2671,8 @@ function resolveCombatDamage(blocks) {
   const summary = [
     ...Object.entries(damageBySeat)
       .filter(([, amount]) => amount > 0)
-      .map(([who, amount]) => `${amount} damage to ${who === HUMAN_SEAT ? "you" : seatLabel(who)}`),
+      .map(([who, amount]) => `${amount} damage to ${who === HUMAN_SEAT ? "you" : seatLabel(who)}${
+        preventedSeats.includes(who) ? " was prevented" : ""}`),
     ...Object.entries(state.lifeGain)
       .filter(([, amount]) => amount > 0)
       .map(([who, amount]) => `${seatSubject(who)} gained ${amount} life`),
@@ -4376,9 +4453,10 @@ function applyResolvedDamage(card, targets) {
   const results = [];
   targets.forEach((target) => {
     if (target.classList.contains("life-total")) {
-      const input = target.querySelector(".life-input");
-      input.value = String(Math.max(0, Number(input.value || 0) - damage));
-      results.push(`${damage} damage to ${targetLabel(target)}`);
+      const outcome = dealDamageToSeat(seatOfElement(target), damage);
+      results.push(outcome.prevented
+        ? `${damage} damage to ${targetLabel(target)} was prevented`
+        : `${damage} damage to ${targetLabel(target)}`);
       return;
     }
     if (shieldAbsorbs(target)) return;
@@ -4845,6 +4923,7 @@ function resolveTriggeredAbility() {
     if (attackedTarget) targets = [attackedTarget];
   }
   const counterResults = applyPlayerCounterEffects(effect, controller, targets);
+  const lifeLossResults = applyLifeLossEffects(effect, controller, targets, source);
   const stateResults = applyPermanentStateEffects(effect, controller, targets, source);
   void createTokensFromEffect(effect, controller);
   if (damage && targets.length) {
@@ -4878,8 +4957,8 @@ function resolveTriggeredAbility() {
   }
   const abilityKind = activeTrigger.type === "activated" ? "activated ability" : "triggered ability";
   showMessage(
-    counterResults.length || stateResults.length
-      ? `${source.dataset.cardName}'s ability resolved: ${[...counterResults, ...stateResults].join("; ")}.`
+    counterResults.length || lifeLossResults.length || stateResults.length
+      ? `${source.dataset.cardName}'s ability resolved: ${[...counterResults, ...lifeLossResults, ...stateResults].join("; ")}.`
       : `${source.dataset.cardName}'s ${abilityKind} resolved.`,
     "success",
   );
@@ -5039,6 +5118,7 @@ function resolveActiveSpell() {
     return;
   }
   const counterResults = applyPlayerCounterEffects(effectText, "player", targetElements);
+  const lifeLossResults = applyLifeLossEffects(effectText, "player", targetElements, card);
   const stateResults = applyPermanentStateEffects(effectText, "player", targetElements, card);
   const originalOracleText = card.dataset.oracleText;
   card.dataset.oracleText = effectText;
@@ -5047,8 +5127,8 @@ function resolveActiveSpell() {
   void createTokensFromEffect(effectText, "player");
   retireResolvedSpell(card);
   showMessage(
-    damageResults.length || counterResults.length || stateResults.length
-      ? `${card.dataset.cardName} resolved: ${[...damageResults, ...counterResults, ...stateResults].join("; ")}.`
+    damageResults.length || counterResults.length || lifeLossResults.length || stateResults.length
+      ? `${card.dataset.cardName} resolved: ${[...damageResults, ...counterResults, ...lifeLossResults, ...stateResults].join("; ")}.`
       : `${card.dataset.cardName}'s effect resolved${resolvedTargets.length ? ` on ${resolvedTargets.join(", ")}` : ""}.`,
     "success",
   );
