@@ -5,7 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=90" />
+    <link rel="stylesheet" href="styles.css?v=97" />
+    <script>
+      // Kept inline and unguarded on purpose: it has to run before the first
+      // paint, and a broken localStorage should not stop the board loading.
+      try {
+        var saved = localStorage.getItem("spellbook.palette");
+        if (saved && saved !== "lapis") document.documentElement.dataset.palette = saved;
+      } catch (error) {}
+    </script>
   </head>
   <body>
     <main class="game-board" data-seat-count="2" aria-label="Magic puzzle board">
@@ -142,6 +150,7 @@
         <button class="instructions-trigger" type="button" aria-haspopup="dialog" hidden><span aria-hidden="true">❓</span> Instructions</button>
         <button class="reset-puzzle" type="button" disabled><span aria-hidden="true">↺</span> Reset</button>
         <button class="archive-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">▤</span> Archive</button>
+        <button class="settings-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">⚙</span> Settings</button>
       </div>
     </div>
 
@@ -172,6 +181,38 @@
         <button class="close-archive" type="button" aria-label="Close archive">×</button>
       </header>
       <div class="archive-list"></div>
+    </aside>
+
+    <!-- How the puzzle ended. Written by app.js, which decides the outcome and
+         fills in the wording; the markup only knows there are two of them. -->
+    <div class="outcome-backdrop" hidden></div>
+    <aside class="outcome-screen" role="alertdialog" aria-modal="true" aria-labelledby="outcome-title" hidden>
+      <p class="outcome-eyebrow"></p>
+      <h2 id="outcome-title" class="outcome-title"></h2>
+      <p class="outcome-detail"></p>
+      <div class="outcome-actions">
+        <button type="button" class="outcome-reset"><span aria-hidden="true">↺</span> Reset puzzle</button>
+        <button type="button" class="outcome-dismiss">Back to the board</button>
+      </div>
+    </aside>
+
+    <div class="settings-backdrop" hidden></div>
+    <aside class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+      <header class="drawer-header">
+        <div>
+          <p class="eyebrow">How the board looks</p>
+          <h2 id="settings-title">Settings</h2>
+        </div>
+        <button class="close-settings" type="button" aria-label="Close settings">×</button>
+      </header>
+      <div class="settings-body">
+        <fieldset class="palette-picker">
+          <legend>Colour palette</legend>
+          <p class="settings-note">Drawn from the card art of Secrets of Strixhaven Mystical Archive.</p>
+          <!-- Rendered by app.js from the PALETTES table, so the swatches can
+               never drift from the palette actually defined in styles.css. -->
+        </fieldset>
+      </div>
     </aside>
 
     <div class="publish-backdrop" hidden></div>
@@ -456,9 +497,10 @@
       </div>
     </aside>
 
-    <script src="counters.js?v=90" defer></script>
-    <script src="storage.js?v=90" defer></script>
-    <script src="app.js?v=90" defer></script>
+    <script src="counters.js?v=97" defer></script>
+    <script src="storage.js?v=97" defer></script>
+    <script src="curtain.js?v=97" defer></script>
+    <script src="app.js?v=97" defer></script>
     <script>
       // Untap, upkeep and draw are one step on this board: nothing in the engine
       // ever needed them apart, and folding them together removes two clicks the
