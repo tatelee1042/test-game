@@ -370,6 +370,18 @@ const archiveDrawer = document.querySelector(".archive-drawer");
 const archiveBackdrop = document.querySelector(".archive-backdrop");
 const archiveList = document.querySelector(".archive-list");
 const closeArchiveButton = document.querySelector(".close-archive");
+const settingsTrigger = document.querySelector(".settings-trigger");
+const settingsDrawer = document.querySelector(".settings-drawer");
+const settingsBackdrop = document.querySelector(".settings-backdrop");
+const closeSettingsButton = document.querySelector(".close-settings");
+const palettePicker = document.querySelector(".palette-picker");
+const outcomeScreen = document.querySelector(".outcome-screen");
+const outcomeBackdrop = document.querySelector(".outcome-backdrop");
+const outcomeEyebrow = document.querySelector(".outcome-eyebrow");
+const outcomeTitle = document.querySelector(".outcome-title");
+const outcomeDetail = document.querySelector(".outcome-detail");
+const outcomeResetButton = document.querySelector(".outcome-reset");
+const outcomeDismissButton = document.querySelector(".outcome-dismiss");
 const resetPuzzleButton = document.querySelector(".reset-puzzle");
 const instructionsTrigger = document.querySelector(".instructions-trigger");
 const instructionsDialog = document.querySelector(".instructions-dialog");
@@ -2469,6 +2481,9 @@ function adjustPlayerLife(who, delta) {
   const input = seatSection(who)?.querySelector(".life-input");
   if (!input) return;
   input.value = String(Math.max(0, Number(input.value || 0) + delta));
+  // Every path that damages or drains a player lands here, so this is the one
+  // place that has to ask whether that was the last point of life on the table.
+  checkForWin();
 }
 
 /* ---------------------------------------------------------------------------
@@ -3051,6 +3066,191 @@ function closeInstructions() {
 }
 
 /* ---------------------------------------------------------------------------
+ * Winning and losing
+ *
+ * A puzzle is a single question: can you kill the table from here, this turn?
+ * So there are exactly two answers. You win the moment every opponent is at 0
+ * life. You lose the moment the turn leaves your seat with any of them still
+ * standing, because the puzzle was always "before their turn begins" and their
+ * turn has just begun.
+ *
+ * Both checks are deliberately narrow. Editing a board is not playing one, and
+ * loading a board that already has a seat at 0 is not a win — only life that
+ * changes during play counts, which is why the win check hangs off
+ * adjustPlayerLife rather than off the life inputs themselves.
+ * ------------------------------------------------------------------------- */
+
+/** null until the puzzle is decided, then "win" or "loss". Reset clears it. */
+let puzzleOutcome = null;
+
+/** Opponents still in it. Empty means the board is dead and you did it. */
+function opponentsStillAlive() {
+  return seatsOtherThan(HUMAN_SEAT).filter((seat) => seatLifeValue(seat) > 0);
+}
+
+/** A puzzle has to be open, and undecided, for either answer to mean anything. */
+function puzzleIsLive() {
+  return Boolean(puzzleBaseline) && !editingMode && !puzzleOutcome;
+}
+
+function showOutcomeScreen(outcome, { eyebrow, title, detail, resetLabel }) {
+  puzzleOutcome = outcome;
+  outcomeScreen.dataset.outcome = outcome;
+  outcomeEyebrow.textContent = eyebrow;
+  outcomeTitle.textContent = title;
+  outcomeDetail.textContent = detail;
+  outcomeResetButton.innerHTML = `<span aria-hidden="true">↺</span> ${resetLabel}`;
+  outcomeScreen.hidden = false;
+  outcomeBackdrop.hidden = false;
+  window.setTimeout(() => outcomeResetButton.focus(), 90);
+}
+
+function closeOutcomeScreen() {
+  outcomeScreen.hidden = true;
+  outcomeBackdrop.hidden = true;
+}
+
+/** Called after anything moves a life total during play. */
+function checkForWin() {
+  if (!puzzleIsLive() || opponentsStillAlive().length) return;
+  const defeated = seatsOtherThan(HUMAN_SEAT);
+  showOutcomeScreen("win", {
+    eyebrow: "Puzzle solved",
+    title: "You win",
+    detail: defeated.length > 1
+      ? `All ${defeated.length} opponents are at 0 life. That is the line.`
+      : `${seatLabel(defeated[0])} is at 0 life. That is the line.`,
+    resetLabel: "Play it again",
+  });
+}
+
+/** Called when the turn passes out of your seat. */
+function checkForLoss(nextSeat) {
+  if (!puzzleIsLive() || !isAiSeat(nextSeat)) return;
+  const alive = opponentsStillAlive();
+  if (!alive.length) return;
+  const survivor = alive.length > 1
+    ? `${alive.length} opponents are still standing`
+    : `${seatLabel(alive[0])} is still on ${seatLifeValue(alive[0])} life`;
+  showOutcomeScreen("loss", {
+    eyebrow: "Out of turns",
+    title: "You lose",
+    detail: `${survivor}, and the turn has passed. The puzzle had to be finished before it did.`,
+    resetLabel: "Try again",
+  });
+}
+
+document.addEventListener("turn:untap", (event) => checkForLoss(event.detail?.seat));
+
+/* ---------------------------------------------------------------------------
+ * Settings
+ *
+ * The palettes themselves live in styles.css under [data-palette]; all this
+ * does is decide which one is on and remember it. The swatch colours below are
+ * the only duplication, and they are here so the picker can show a palette it
+ * is not currently wearing.
+ * ------------------------------------------------------------------------- */
+
+const PALETTE_STORAGE_KEY = "spellbook.palette";
+/** The palette :root already carries, so choosing it means clearing the attribute. */
+const DEFAULT_PALETTE = "lapis";
+
+const PALETTES = [
+  {
+    id: "lapis",
+    name: "Lapis & Gold",
+    blurb: "Slate and lapis night grounds, cold cyan, one gold thread.",
+    swatches: ["#101a21", "#1c2b39", "#56a2c6", "#ddb967", "#e7e0c9"],
+  },
+  {
+    id: "parchment",
+    name: "Parchment & Gold Leaf",
+    blurb: "The aged paper the set is printed on. Ink-brown type, deep leaf gold.",
+    swatches: ["#e8dcbd", "#f6efdb", "#c9a24a", "#77580f", "#2b1f1c"],
+  },
+  {
+    id: "ember",
+    name: "Ember Vellum",
+    blurb: "Scorched grounds, sienna and vermilion, warm vellum highlights.",
+    swatches: ["#1a0f0d", "#2e1a16", "#dc7059", "#d6a35e", "#e9e0cb"],
+  },
+];
+
+function storedPalette() {
+  try {
+    const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
+    return PALETTES.some((palette) => palette.id === saved) ? saved : DEFAULT_PALETTE;
+  } catch (_error) {
+    return DEFAULT_PALETTE;
+  }
+}
+
+/**
+ * Swapping the attribute is the whole switch — every colour on the board reads
+ * through a token that [data-palette] redefines.
+ */
+function applyPalette(id) {
+  if (id === DEFAULT_PALETTE) delete document.documentElement.dataset.palette;
+  else document.documentElement.dataset.palette = id;
+  try {
+    localStorage.setItem(PALETTE_STORAGE_KEY, id);
+  } catch (_error) {
+    // A board that cannot remember the choice is still a board that honours it.
+  }
+  for (const option of palettePicker.querySelectorAll(".palette-option")) {
+    option.setAttribute("aria-pressed", String(option.dataset.palette === id));
+  }
+}
+
+function renderPalettePicker() {
+  const active = storedPalette();
+  for (const palette of PALETTES) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "palette-option";
+    option.dataset.palette = palette.id;
+    option.setAttribute("aria-pressed", String(palette.id === active));
+
+    const swatches = document.createElement("span");
+    swatches.className = "palette-swatches";
+    for (const colour of palette.swatches) {
+      const chip = document.createElement("i");
+      chip.style.background = colour;
+      swatches.append(chip);
+    }
+
+    const text = document.createElement("span");
+    const name = document.createElement("span");
+    name.className = "palette-name";
+    name.textContent = palette.name;
+    const blurb = document.createElement("span");
+    blurb.className = "palette-blurb";
+    blurb.textContent = palette.blurb;
+    text.append(name, blurb);
+
+    const check = document.createElement("span");
+    check.className = "palette-check";
+    check.setAttribute("aria-hidden", "true");
+    check.textContent = "✓";
+
+    option.append(swatches, text, check);
+    option.addEventListener("click", () => applyPalette(palette.id));
+    palettePicker.append(option);
+  }
+}
+
+function openSettings() {
+  settingsDrawer.hidden = false;
+  settingsBackdrop.hidden = false;
+  window.setTimeout(() => closeSettingsButton.focus(), 80);
+}
+
+function closeSettings() {
+  settingsDrawer.hidden = true;
+  settingsBackdrop.hidden = true;
+}
+
+/* ---------------------------------------------------------------------------
  * Reset
  * ------------------------------------------------------------------------- */
 
@@ -3102,7 +3302,7 @@ function clearTransientPlayState() {
  * click and confirmed by the second, because a stray click would otherwise throw
  * away however far into the puzzle the player had worked.
  */
-function resetPuzzle() {
+async function resetPuzzle() {
   if (!puzzleBaseline) return;
   if (!resetPuzzleArmed) {
     resetPuzzleArmed = true;
@@ -3113,10 +3313,26 @@ function resetPuzzle() {
     return;
   }
   disarmResetPuzzle();
-  clearTransientPlayState();
-  // A fresh copy each time: the baseline has to survive being restored twice.
-  loadBoardState(structuredClone(puzzleBaseline), { announce: false });
-  updateCombatButton();
+  await restorePuzzleBaseline();
+}
+
+/**
+ * The reset itself, with no confirmation in front of it. The puzzle bar arms
+ * first because a stray click there would throw away the player's work; the
+ * outcome screen does not, because there the reset is the offer being made.
+ */
+async function restorePuzzleBaseline() {
+  if (!puzzleBaseline) return;
+  // Behind blinds, because tearing the board down and building it back up is
+  // the one change on this page big enough to look broken while it happens.
+  await Curtains.blinds(() => {
+    closeOutcomeScreen();
+    clearTransientPlayState();
+    // A fresh copy each time: the baseline has to survive being restored twice.
+    loadBoardState(structuredClone(puzzleBaseline), { announce: false });
+    updateCombatButton();
+    puzzleOutcome = null;
+  });
   showMessage("Board reset to the published puzzle.", "success");
 }
 
@@ -3128,6 +3344,9 @@ async function openPuzzle(id, { announce = true } = {}) {
     return false;
   }
   loadedPuzzle = puzzle;
+  // A new puzzle is a new question: whatever the last one answered is gone.
+  puzzleOutcome = null;
+  closeOutcomeScreen();
   clearTransientPlayState();
   loadBoardState(puzzle.state, { announce: false });
   // Captured from the file rather than from the board, so Reset returns to what
@@ -5906,6 +6125,10 @@ document.addEventListener("keydown", (event) => {
     }
   }
   if (event.key !== "Escape") return;
+  if (!outcomeScreen.hidden) {
+    closeOutcomeScreen();
+    return;
+  }
   if (!counterManager.hidden) {
     closeCounterManager();
     return;
@@ -5947,6 +6170,10 @@ document.addEventListener("keydown", (event) => {
   }
   if (!archiveDrawer.hidden) {
     closeArchive();
+    return;
+  }
+  if (!settingsDrawer.hidden) {
+    closeSettings();
     return;
   }
   if (selectedCard) cancelPlacement();
@@ -6017,6 +6244,12 @@ editControlsToggle.addEventListener("click", () => {
 
 archiveTrigger.addEventListener("click", openArchive);
 closeArchiveButton.addEventListener("click", closeArchive);
+outcomeResetButton.addEventListener("click", () => restorePuzzleBaseline());
+outcomeDismissButton.addEventListener("click", closeOutcomeScreen);
+settingsTrigger.addEventListener("click", openSettings);
+closeSettingsButton.addEventListener("click", closeSettings);
+settingsBackdrop.addEventListener("click", closeSettings);
+renderPalettePicker();
 archiveBackdrop.addEventListener("click", closeArchive);
 publishTrigger.addEventListener("click", openPublishDialog);
 closePublishButton.addEventListener("click", closePublishDialog);
