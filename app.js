@@ -381,6 +381,10 @@ const outcomeEyebrow = document.querySelector(".outcome-eyebrow");
 const outcomeTitle = document.querySelector(".outcome-title");
 const outcomeDetail = document.querySelector(".outcome-detail");
 const outcomeResetButton = document.querySelector(".outcome-reset");
+const puzzleTimerReadout = document.querySelector(".puzzle-timer");
+const puzzleTimerValue = document.querySelector(".puzzle-timer-value");
+const outcomeTime = document.querySelector(".outcome-time");
+const outcomeTimeValue = document.querySelector(".outcome-time-value");
 const outcomeDismissButton = document.querySelector(".outcome-dismiss");
 const resetPuzzleButton = document.querySelector(".reset-puzzle");
 const instructionsTrigger = document.querySelector(".instructions-trigger");
@@ -3083,6 +3087,20 @@ function closeInstructions() {
 /** null until the puzzle is decided, then "win" or "loss". Reset clears it. */
 let puzzleOutcome = null;
 
+/**
+ * Paints the clock in the puzzle bar. PuzzleTimer calls this on every tick and
+ * whenever it starts or stops, so the three states it can be in — running,
+ * paused because the player stepped away, and finished — are all visible here
+ * rather than inferred.
+ */
+function paintPuzzleTimer(elapsed, finished) {
+  puzzleTimerValue.textContent = PuzzleTimer.format(elapsed);
+  puzzleTimerReadout.dataset.state = finished
+    ? "finished"
+    : PuzzleTimer.isRunning() ? "running" : "paused";
+  puzzleTimerReadout.hidden = false;
+}
+
 /** Opponents still in it. Empty means the board is dead and you did it. */
 function opponentsStillAlive() {
   return seatsOtherThan(HUMAN_SEAT).filter((seat) => seatLifeValue(seat) > 0);
@@ -3093,13 +3111,16 @@ function puzzleIsLive() {
   return Boolean(puzzleBaseline) && !editingMode && !puzzleOutcome;
 }
 
-function showOutcomeScreen(outcome, { eyebrow, title, detail, resetLabel }) {
+function showOutcomeScreen(outcome, { eyebrow, title, detail, resetLabel, time = null }) {
   puzzleOutcome = outcome;
   outcomeScreen.dataset.outcome = outcome;
   outcomeEyebrow.textContent = eyebrow;
   outcomeTitle.textContent = title;
   outcomeDetail.textContent = detail;
   outcomeResetButton.innerHTML = `<span aria-hidden="true">↺</span> ${resetLabel}`;
+  // Only a finished puzzle has a time worth showing. Losing has no result.
+  outcomeTime.hidden = time === null;
+  if (time !== null) outcomeTimeValue.textContent = PuzzleTimer.format(time);
   outcomeScreen.hidden = false;
   outcomeBackdrop.hidden = false;
   window.setTimeout(() => outcomeResetButton.focus(), 90);
@@ -3114,6 +3135,9 @@ function closeOutcomeScreen() {
 function checkForWin() {
   if (!puzzleIsLive() || opponentsStillAlive().length) return;
   const defeated = seatsOtherThan(HUMAN_SEAT);
+  // Stops the clock before the screen goes up, so the time on it is the time it
+  // took to solve the puzzle and not the time it took to read about solving it.
+  const solvedIn = PuzzleTimer.finish();
   showOutcomeScreen("win", {
     eyebrow: "Puzzle solved",
     title: "You win",
@@ -3121,6 +3145,7 @@ function checkForWin() {
       ? `All ${defeated.length} opponents are at 0 life. That is the line.`
       : `${seatLabel(defeated[0])} is at 0 life. That is the line.`,
     resetLabel: "Play it again",
+    time: solvedIn,
   });
 }
 
@@ -3347,6 +3372,8 @@ async function openPuzzle(id, { announce = true } = {}) {
   // A new puzzle is a new question: whatever the last one answered is gone.
   puzzleOutcome = null;
   closeOutcomeScreen();
+  // First open of the day starts the clock; a later one resumes it.
+  PuzzleTimer.open(puzzle.id, { onChange: paintPuzzleTimer });
   clearTransientPlayState();
   loadBoardState(puzzle.state, { announce: false });
   // Captured from the file rather than from the board, so Reset returns to what

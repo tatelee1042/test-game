@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=97" />
+    <link rel="stylesheet" href="styles.css?v=98" />
     <script>
       // Kept inline and unguarded on purpose: it has to run before the first
       // paint, and a broken localStorage should not stop the board loading.
@@ -145,6 +145,11 @@
         <h2 class="puzzle-title">Loading today's puzzle…</h2>
         <p class="puzzle-meta"></p>
       </div>
+
+      <!-- Filled by app.js from PuzzleTimer. Hidden until a puzzle is open. -->
+      <p class="puzzle-timer" role="timer" aria-label="Time on this puzzle" hidden>
+        <span class="puzzle-timer-icon" aria-hidden="true">◷</span><span class="puzzle-timer-value">0:00</span>
+      </p>
       <div class="puzzle-actions">
         <!-- Only shown once the open puzzle actually carries instructions. -->
         <button class="instructions-trigger" type="button" aria-haspopup="dialog" hidden><span aria-hidden="true">❓</span> Instructions</button>
@@ -190,6 +195,10 @@
       <p class="outcome-eyebrow"></p>
       <h2 id="outcome-title" class="outcome-title"></h2>
       <p class="outcome-detail"></p>
+      <p class="outcome-time" hidden>
+        <span class="outcome-time-label">Your time</span>
+        <span class="outcome-time-value"></span>
+      </p>
       <div class="outcome-actions">
         <button type="button" class="outcome-reset"><span aria-hidden="true">↺</span> Reset puzzle</button>
         <button type="button" class="outcome-dismiss">Back to the board</button>
@@ -497,10 +506,11 @@
       </div>
     </aside>
 
-    <script src="counters.js?v=97" defer></script>
-    <script src="storage.js?v=97" defer></script>
-    <script src="curtain.js?v=97" defer></script>
-    <script src="app.js?v=97" defer></script>
+    <script src="counters.js?v=98" defer></script>
+    <script src="storage.js?v=98" defer></script>
+    <script src="curtain.js?v=98" defer></script>
+    <script src="timer.js?v=98" defer></script>
+    <script src="app.js?v=98" defer></script>
     <script>
       // Untap, upkeep and draw are one step on this board: nothing in the engine
       // ever needed them apart, and folding them together removes two clicks the

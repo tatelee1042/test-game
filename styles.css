@@ -3835,3 +3835,72 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
 @media (prefers-reduced-motion: reduce) {
   .outcome-screen { animation: none; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Puzzle timer
+ *
+ * Quiet while it runs — it is information, not a countdown, and a daily puzzle
+ * should not feel like a test. It only takes the palette's gold once the puzzle
+ * is finished, which is the moment the number is worth reading.
+ * ------------------------------------------------------------------------- */
+
+.puzzle-timer {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 4px 11px;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.puzzle-timer[hidden] { display: none; }
+
+.puzzle-timer-icon { font-size: 0.78rem; line-height: 1; }
+
+/* Stopped because the player stepped away, rather than stopped because they
+   are done: dimmed, so a clock that is not counting never looks like one that
+   is. */
+.puzzle-timer[data-state="paused"] { opacity: 0.55; }
+
+.puzzle-timer[data-state="finished"] {
+  border-color: rgba(var(--gold-rgb), 0.55);
+  background: rgba(var(--gold-rgb), 0.12);
+  color: var(--gold-bright);
+  font-weight: 600;
+}
+
+/* The time on the win screen. Given the room a result deserves. */
+.outcome-time {
+  display: grid;
+  margin: 14px 0 0;
+  justify-items: center;
+  gap: 2px;
+}
+
+.outcome-time[hidden] { display: none; }
+
+.outcome-time-label {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.outcome-time-value {
+  color: var(--ink);
+  font-size: 1.7rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+@media (max-width: 720px) {
+  .puzzle-timer-value { font-size: 0.66rem; }
+}
