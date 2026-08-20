@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A daily Magic: The Gathering puzzle battlefield." />
     <title>Daily Spellbook — Puzzle Board</title>
-    <link rel="stylesheet" href="styles.css?v=98" />
+    <link rel="stylesheet" href="styles.css?v=103" />
     <script>
       // Kept inline and unguarded on purpose: it has to run before the first
       // paint, and a broken localStorage should not stop the board loading.
@@ -31,15 +31,17 @@
                 <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
               </div>
             </div>
+            <div class="player-vitals">
+              <div class="life-total" aria-label="__LABEL__ life total">
+                <span>HP</span>
+                <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease __LABEL__ HP" disabled>−</button>
+                <input class="life-input" type="number" value="20" min="0" max="999" aria-label="__LABEL__ HP" disabled />
+                <button class="life-adjust" type="button" data-delta="1" aria-label="Increase __LABEL__ HP" disabled>+</button>
+              </div>
+            </div>
             <div class="seat-edit-actions">
               <button class="seat-behavior" type="button" aria-haspopup="dialog"><span aria-hidden="true">⚙</span> Behavior</button>
               <button class="seat-remove" type="button" aria-label="Remove __LABEL__">✕</button>
-            </div>
-            <div class="life-total" aria-label="__LABEL__ life total">
-              <span>HP</span>
-              <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease __LABEL__ HP" disabled>−</button>
-              <input class="life-input" type="number" value="20" min="0" max="999" aria-label="__LABEL__ HP" disabled />
-              <button class="life-adjust" type="button" data-delta="1" aria-label="Increase __LABEL__ HP" disabled>+</button>
             </div>
           </header>
 
@@ -71,19 +73,6 @@
 
         </section>
       </template>
-
-      <nav class="turn-divider" aria-label="Turn phases">
-        <p class="active-seat-banner"><span class="active-seat-label">Your turn</span> · Turn <span class="active-turn-number">1</span></p>
-        <ol class="phase-list">
-          <!-- Untap, upkeep and draw run as one step: see turnPhases below. -->
-          <li class="phase-step active" aria-current="step">Upkeep</li>
-          <li class="phase-step">Main 1</li>
-          <li class="phase-step">Combat</li>
-          <li class="phase-step">Main 2</li>
-          <li class="phase-step">End</li>
-        </ol>
-        <button class="next-phase" type="button">Next phase <span aria-hidden="true">→</span></button>
-      </nav>
 
       <section class="player-side player" data-seat="player" aria-labelledby="player-name">
         <div class="play-area">
@@ -124,19 +113,34 @@
               <span class="player-counter experience-counter" data-counter="experience" data-value="0" hidden>Experience 0</span>
             </div>
           </div>
-          <div class="mana-console" aria-label="Your mana pool">
-            <span class="mana-console-label">Mana pool</span>
-            <div class="mana-pool" role="status">Empty</div>
-            <button class="clear-mana" type="button">Clear</button>
-          </div>
-          <div class="life-total" aria-label="Your life total">
-            <span>HP</span>
-            <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease your HP" disabled>−</button>
-            <input class="life-input" type="number" value="20" min="0" max="999" aria-label="Your HP" disabled />
-            <button class="life-adjust" type="button" data-delta="1" aria-label="Increase your HP" disabled>+</button>
+          <div class="player-vitals">
+            <div class="life-total" aria-label="Your life total">
+              <span>HP</span>
+              <button class="life-adjust" type="button" data-delta="-1" aria-label="Decrease your HP" disabled>−</button>
+              <input class="life-input" type="number" value="20" min="0" max="999" aria-label="Your HP" disabled />
+              <button class="life-adjust" type="button" data-delta="1" aria-label="Increase your HP" disabled>+</button>
+            </div>
+            <div class="mana-console" aria-label="Your mana pool">
+              <span class="mana-console-label">Mana pool</span>
+              <div class="mana-pool" role="status">Empty</div>
+              <button class="clear-mana" type="button">Clear</button>
+            </div>
           </div>
         </header>
       </section>
+
+      <nav class="turn-divider" aria-label="Turn phases">
+        <p class="active-seat-banner"><span class="active-seat-label">Your turn</span> · Turn <span class="active-turn-number">1</span></p>
+        <ol class="phase-list">
+          <!-- Untap, upkeep and draw run as one step: see turnPhases below. -->
+          <li class="phase-step active" aria-current="step">Upkeep</li>
+          <li class="phase-step">Main 1</li>
+          <li class="phase-step">Combat</li>
+          <li class="phase-step">Main 2</li>
+          <li class="phase-step">End</li>
+        </ol>
+        <button class="next-phase" type="button">Next phase <span aria-hidden="true">→</span></button>
+      </nav>
     </main>
 
     <div class="puzzle-bar">
@@ -464,6 +468,10 @@
       <div class="graveyard-viewer-cards"></div>
     </aside>
     <div class="trigger-viewer-backdrop" hidden></div>
+    <!-- One inert shell per trigger still queued behind the live one. Filled by
+         syncTriggerStack; decoration only, so it is hidden from the a11y tree --
+         the queue is announced by the panel in front of it. -->
+    <div class="trigger-stack" aria-hidden="true" hidden></div>
     <aside class="trigger-viewer" role="dialog" aria-modal="true" aria-labelledby="trigger-viewer-title" hidden>
       <img class="trigger-source-image" alt="" />
       <div>
@@ -506,11 +514,11 @@
       </div>
     </aside>
 
-    <script src="counters.js?v=98" defer></script>
-    <script src="storage.js?v=98" defer></script>
-    <script src="curtain.js?v=98" defer></script>
-    <script src="timer.js?v=98" defer></script>
-    <script src="app.js?v=98" defer></script>
+    <script src="counters.js?v=103" defer></script>
+    <script src="storage.js?v=103" defer></script>
+    <script src="curtain.js?v=103" defer></script>
+    <script src="timer.js?v=103" defer></script>
+    <script src="app.js?v=103" defer></script>
     <script>
       // Untap, upkeep and draw are one step on this board: nothing in the engine
       // ever needed them apart, and folding them together removes two clicks the

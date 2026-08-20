@@ -148,9 +148,11 @@ function buildSeat(seatId) {
     .replaceAll("__SEAT__", seatId)
     .replaceAll("__LABEL__", "Opponent");
   const section = holder.firstElementChild;
-  // The third AI seat sits below the divider, so it follows the human in the DOM.
+  // The third AI seat shares the bottom row with the human, so it follows them
+  // in the DOM; the others go above. Anchored on the human's own section because
+  // the turn nav now sits after it rather than between the two halves.
   if (aiSeatIds().length >= 2) gameBoard.append(section);
-  else gameBoard.insertBefore(section, document.querySelector(".turn-divider"));
+  else gameBoard.insertBefore(section, document.querySelector(".player-side.player"));
   section.querySelectorAll(".drop-zone").forEach(registerZone);
   behaviorFor(seatId);
   assignSeatSlots();
@@ -306,6 +308,9 @@ function registerZone(zone) {
     }).observe(zone, { childList: true });
     new MutationObserver(arrangeLandStacks).observe(zone, { childList: true });
   }
+  if (zoneName.endsWith("-hand")) {
+    new MutationObserver(arrangeHandFans).observe(zone, { childList: true });
+  }
 }
 
 const importer = {
@@ -441,6 +446,7 @@ const graveyardViewerCards = document.querySelector(".graveyard-viewer-cards");
 const closeGraveyardViewerButton = document.querySelector(".close-graveyard-viewer");
 const triggerViewer = document.querySelector(".trigger-viewer");
 const triggerViewerBackdrop = document.querySelector(".trigger-viewer-backdrop");
+const triggerStack = document.querySelector(".trigger-stack");
 const triggerViewerKind = document.querySelector(".trigger-viewer-kind");
 const triggerSourceImage = document.querySelector(".trigger-source-image");
 const triggerViewerTitle = document.querySelector("#trigger-viewer-title");
@@ -2021,6 +2027,39 @@ function arrangeLandStacks() {
 }
 
 window.addEventListener("resize", arrangeLandStacks);
+
+/*
+ * Hand cards fan along a shallow arc.
+ *
+ * Two custom properties per card; the geometry is CSS. --hand-fan-angle tilts a
+ * card and --hand-fan-lift drops it, so the row of top edges bows downwards at
+ * the ends. The pivot is the card's bottom edge -- the clipped end a real hand
+ * would be held by -- so it is the visible top strip that spreads.
+ *
+ * The spread per card shrinks as the hand grows: FAN_STEP caps the gap between
+ * any two neighbours and FAN_SPREAD caps the whole arc, so a big hand curves no
+ * harder than a small one, it just packs the same arc more tightly. One card
+ * sits dead upright, because a lone card has nothing to fan against.
+ */
+const FAN_STEP = 2.4;
+const FAN_SPREAD = 13;
+const FAN_LIFT = 5;
+
+function arrangeHandFans() {
+  document.querySelectorAll('[data-zone$="-hand"]').forEach((hand) => {
+    const cards = [...hand.querySelectorAll(":scope > .board-card")];
+    const step = cards.length > 1 ? Math.min(FAN_STEP, FAN_SPREAD / (cards.length - 1)) : 0;
+    const middle = (cards.length - 1) / 2;
+    // A lone card is its own middle, so `reach` would be 0; it never divides by
+    // it, but the guard keeps the single-card case at a clean zero either way.
+    const reach = middle || 1;
+    cards.forEach((card, index) => {
+      const offset = index - middle;
+      card.style.setProperty("--hand-fan-angle", `${(offset * step).toFixed(2)}deg`);
+      card.style.setProperty("--hand-fan-lift", `${(FAN_LIFT * (offset / reach) ** 2).toFixed(2)}px`);
+    });
+  });
+}
 
 function untapAllPermanents(announce = true) {
   let stunCountersRemoved = 0;
@@ -4830,6 +4869,7 @@ function emitGameEvent(eventName, context = {}) {
     });
   });
   showNextTriggeredAbility();
+  syncTriggerStack();
 }
 
 function renderAbilityTargets() {
@@ -5110,6 +5150,133 @@ function openSurgeCastMenu(source) {
   surgeButton.focus();
 }
 
+/*
+ * Shows how many triggers are still queued behind the one on screen.
+ *
+ * The queue has always resolved one trigger at a time, so a board that set off
+ * four looked exactly like a board that set off one. Each waiting trigger now
+ * leaves an inert shell behind the live panel, a centimetre further right and up
+ * per place in the queue.
+ *
+ * Driven by state, not by call sites: the viewer is hidden from a dozen places
+ * and an observer on its `hidden` attribute catches all of them, so no caller
+ * has to know the stack exists.
+ */
+function syncTriggerStack() {
+  const waiting = triggerViewer.hidden ? 0 : triggerQueue.length;
+  triggerStack.hidden = waiting === 0;
+  if (!waiting) {
+    triggerStack.replaceChildren();
+    return;
+  }
+  // The live panel sets the shape, so what shows of each shell is the strip its
+  // own offset exposes rather than a smaller card peeking out.
+  const panelHeight = triggerViewer.offsetHeight;
+  // Deepest first: at equal z-index the later sibling paints on top, which lands
+  // the shell nearest the front closest to the live panel.
+  const shells = [...triggerQueue].reverse().map((queued, index) => {
+    const shell = document.createElement("div");
+    shell.className = "trigger-stack-card";
+    if (queued.eventName === "dies") shell.classList.add("death-trigger-shell");
+    shell.style.setProperty("--trigger-stack-depth", String(triggerQueue.length - index));
+    shell.style.height = `${panelHeight}px`;
+    return shell;
+  });
+  triggerStack.replaceChildren(...shells);
+}
+
+new MutationObserver(syncTriggerStack).observe(triggerViewer, { attributes: true, attributeFilter: ["hidden"] });
+window.addEventListener("resize", syncTriggerStack);
+
+/*
+ * Resolving a trigger sends its panel back into the permanent that raised it.
+ *
+ * This is the shared-element morph from Motion's now-playing example, which
+ * collapses the open player back into its mini bar on click. Motion does it
+ * with animateView() over the View Transition API; this board ships no
+ * dependencies, so the same effect is done by hand -- measure both boxes, then
+ * carry a snapshot of the panel from one to the other. That is what a shared
+ * element transition is underneath, and animating a snapshot rather than the
+ * live panel is also what makes it free: the panel hides on the same frame it
+ * always did and resolution carries on behind the animation.
+ *
+ * The spring is baked into the keyframes because the platform has no spring
+ * easing -- also what Motion does when it drives WAAPI.
+ */
+const TRIGGER_MORPH_MS = 520;
+const TRIGGER_MORPH_SPRING = { stiffness: 220, damping: 20, mass: 1 };
+
+let triggerMorphCurve = null;
+
+/* Damped spring sampled at 60fps, as progress from 0 to 1. Slightly underdamped,
+   so it overshoots a few percent and settles rather than easing flatly in. */
+function springCurve({ stiffness, damping, mass }, durationMs) {
+  const steps = Math.max(2, Math.round((durationMs / 1000) * 60));
+  const dt = 1 / 60;
+  const points = [];
+  let position = 0;
+  let velocity = 0;
+  for (let step = 0; step <= steps; step += 1) {
+    points.push(position);
+    const force = -stiffness * (position - 1) - damping * velocity;
+    velocity += (force / mass) * dt;
+    position += velocity * dt;
+  }
+  // However close the spring got, the morph has to land exactly on the card.
+  points[points.length - 1] = 1;
+  return points;
+}
+
+function morphTriggerToSource(source) {
+  if (triggerViewer.hidden) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const from = triggerViewer.getBoundingClientRect();
+  // A death trigger's source has already left the battlefield, and a collapsed
+  // graveyard card has no box at all, so aim at whichever zone now holds it.
+  const landing = source?.isConnected && source.getBoundingClientRect().width
+    ? source
+    : source?.closest(".drop-zone");
+  const to = landing?.getBoundingClientRect();
+  if (!from.width || !to?.width) return;
+
+  const ghost = triggerViewer.cloneNode(true);
+  ghost.classList.add("trigger-morph-ghost");
+  // A snapshot, not a dialog: no duplicated ids, nothing to reach or announce.
+  ghost.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  ["id", "role", "aria-modal", "aria-labelledby"].forEach((name) => ghost.removeAttribute(name));
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.inert = true;
+  ghost.hidden = false;
+  ghost.style.left = `${from.left}px`;
+  ghost.style.top = `${from.top}px`;
+  ghost.style.width = `${from.width}px`;
+  ghost.style.height = `${from.height}px`;
+  document.body.append(ghost);
+
+  // Uniform scale off the width: matching both axes would squash the artwork,
+  // and the fade covers the difference long before the shapes disagree.
+  const scale = to.width / from.width;
+  const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+  const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+  triggerMorphCurve ||= springCurve(TRIGGER_MORPH_SPRING, TRIGGER_MORPH_MS);
+  const lastIndex = triggerMorphCurve.length - 1;
+
+  const animation = ghost.animate(
+    {
+      transform: triggerMorphCurve.map(
+        (progress) => `translate(${(dx * progress).toFixed(2)}px, ${(dy * progress).toFixed(2)}px) scale(${(1 + (scale - 1) * progress).toFixed(4)})`,
+      ),
+      // Holds full strength for the first stretch, so the panel reads as itself
+      // while it travels and only thins out as it arrives.
+      opacity: triggerMorphCurve.map((_, index) => Math.min(1, (1 - index / lastIndex) / 0.55)),
+    },
+    // The spring lives in the keyframes, so the timing between them is linear.
+    { duration: TRIGGER_MORPH_MS, easing: "linear", fill: "forwards" },
+  );
+  animation.finished.catch(() => {}).finally(() => ghost.remove());
+}
+
 function showNextTriggeredAbility() {
   if (activeTrigger || activeAbilitySource || !triggerQueue.length) return;
   activeTrigger = triggerQueue.shift();
@@ -5124,6 +5291,7 @@ function showNextTriggeredAbility() {
   renderAbilityTargets();
   triggerViewer.hidden = false;
   triggerViewerBackdrop.hidden = false;
+  syncTriggerStack();
   resolveTriggerButton.focus();
 }
 
@@ -5214,6 +5382,7 @@ function resolveTriggeredAbility() {
   abilityTargetingController = null;
   document.querySelectorAll(".legal-ability-target, .chosen-ability-target").forEach((target) => target.classList.remove("legal-ability-target", "chosen-ability-target"));
   abilityCostBar.hidden = true;
+  morphTriggerToSource(source);
   triggerViewer.hidden = true;
   triggerViewer.classList.remove("death-trigger-viewer");
   triggerViewerBackdrop.hidden = true;
@@ -6357,6 +6526,7 @@ updateGraveyardDisplays();
 updateExileDisplays();
 
 arrangeLandStacks();
+arrangeHandFans();
 recalculateStaticAbilities();
 
 renderManaPool();

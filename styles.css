@@ -168,13 +168,20 @@ input {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) 58px minmax(0, 1fr);
+  /* The turn nav used to own a band through the middle; with it docked in the
+     bottom-right corner the two halves need only a hairline of separation. */
+  grid-template-rows: minmax(0, 1fr) 10px minmax(0, 1fr);
   /* Leaves room for the fixed puzzle bar rather than letting it cover a seat. */
   padding-top: 62px;
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
   isolation: isolate;
+  /* Geometry of the docked turn nav, shared with the hand zone that has to keep
+     clear of it. --turn-dock-bottom clears the player bar plus the row gap. */
+  --turn-dock-width: 312px;
+  --turn-dock-bottom: 76px;
+  --turn-dock-right: 22px;
   background:
     radial-gradient(circle at 50% 50%, rgba(201, 157, 73, 0.1), transparent 28%),
     repeating-linear-gradient(30deg, rgba(255, 255, 255, 0.013) 0 1px, transparent 1px 5px),
@@ -199,6 +206,10 @@ input {
   overflow: hidden;
   padding: 10px 22px;
   gap: 8px;
+  /* Left edge shared by every zone label in the seat, and the strip of hand the
+     label reserves for itself so cards never run under it. */
+  --label-inset: 4px;
+  --hand-label-gutter: 116px;
 }
 
 .opponent {
@@ -212,9 +223,12 @@ input {
 }
 
 .player-bar {
-  display: flex;
+  /* Identity left, vitals centred, seat controls right. The outer tracks are
+     equal so the vitals sit on the bar's true centre whatever flanks them --
+     including the human's bar, where the right track is empty. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   min-height: 58px;
   padding: 8px 12px 8px 18px;
   border: 1px solid var(--line);
@@ -225,7 +239,17 @@ input {
 
 .player-identity {
   display: flex;
+  min-width: 0;
   align-items: center;
+  gap: 14px;
+}
+
+/* HP and the mana pool read as one vitals block, so they travel together. AI
+   seats carry only the life total; it centres on its own just the same. */
+.player-vitals {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 14px;
 }
 
@@ -368,8 +392,6 @@ h2 {
   display: grid;
   grid-template-columns: auto minmax(70px, auto) auto auto;
   align-items: center;
-  margin-left: auto;
-  margin-right: 14px;
   gap: 7px;
 }
 
@@ -536,7 +558,7 @@ h2 {
 }
 
 .battlefield-heading {
-  padding-inline: 4px;
+  padding-inline: var(--label-inset);
   color: var(--ink-soft);
   font-size: 0.58rem;
   font-weight: 700;
@@ -692,17 +714,54 @@ h2 {
   background: linear-gradient(180deg, rgba(var(--ground-rgb), 0.48), rgba(var(--ground-rgb), 0.76));
 }
 
+/*
+ * The turn nav is chrome, not territory: it reads as a HUD tile pinned to the
+ * bottom-right corner rather than a band cutting the board in half. It sits in
+ * the hand row's right end, which .player-side.player .hand-zone keeps clear,
+ * so it never covers a card or a drop target.
+ */
 .turn-divider {
+  position: absolute;
+  z-index: 12;
+  right: var(--turn-dock-right);
+  bottom: var(--turn-dock-bottom);
   display: grid;
-  grid-row: 2;
-  grid-column: 1 / -1;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: var(--turn-dock-width);
   align-items: center;
-  padding: 6px 26px;
-  gap: 14px;
-  border-top: 1px solid rgba(var(--gold-rgb), 0.18);
-  border-bottom: 1px solid rgba(var(--gold-rgb), 0.18);
-  background: rgba(var(--ground-rgb), 0.56);
+  padding: 7px 9px;
+  gap: 6px 8px;
+  border: 1px solid rgba(var(--gold-rgb), 0.22);
+  border-radius: 9px;
+  background: rgba(var(--ground-rgb), 0.9);
+  box-shadow: 0 10px 28px rgba(var(--shadow-rgb), 0.32);
+}
+
+.turn-divider .active-seat-banner {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.turn-divider .phase-list {
+  grid-column: 1;
+}
+
+.turn-divider .next-phase {
+  grid-column: 2;
+  height: 30px;
+}
+
+/* The dock stands where the hand would otherwise spread, so the hand stops
+   short of it. Beats overlaying: hand cards stay fully reachable. */
+.player-side.player .hand-zone {
+  padding-right: calc(var(--turn-dock-width) + 16px);
+}
+
+/* Four seats put an opponent in the bottom-right, so the dock retreats to the
+   right edge of the human's own half instead of the board's. */
+.game-board[data-seat-count="4"] {
+  --turn-dock-right: calc(50% + 13px);
+  --turn-dock-width: 214px;
 }
 
 .active-seat-banner {
@@ -783,6 +842,7 @@ h2 {
 .game-board[data-seat-count="3"] .ai-seat,
 .game-board[data-seat-count="4"] .player-side {
   --pile-column: 96px;
+  --hand-label-gutter: 92px;
 }
 
 .game-board[data-seat-count="3"] .ai-seat .player-bar,
@@ -883,7 +943,7 @@ h2 {
 .phase-list {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -904,14 +964,14 @@ h2 {
 .phase-step {
   position: relative;
   justify-self: center;
-  padding: 5px 7px;
+  padding: 4px 5px;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--muted);
   background: var(--surface-2);
-  font-size: clamp(0.45rem, 0.72vw, 0.58rem);
+  font-size: clamp(0.42rem, 0.62vw, 0.5rem);
   font-weight: 700;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.05em;
   text-align: center;
   text-transform: uppercase;
   white-space: nowrap;
@@ -924,6 +984,7 @@ h2 {
   background: var(--gold-wash);
   box-shadow: 0 0 18px rgba(var(--gold-rgb), 0.28);
   transform: scale(1.08);
+  transform-origin: center;
 }
 
 .phase-step.phase-enter {
@@ -1068,6 +1129,7 @@ h2 {
 .seat-edit-actions {
   display: none;
   align-items: center;
+  justify-self: end;
   gap: 6px;
 }
 
@@ -2187,35 +2249,44 @@ body.editing-mode .seat-edit-actions {
   overflow: visible;
   align-items: flex-start;
   padding-block: 3px 0;
+  padding-inline: var(--hand-label-gutter) 24px;
 }
 
 /*
- * An empty hand centres its label in the middle of the zone. Once cards arrive
- * the label would otherwise sit inline and shove them sideways, so it leaves
- * the flow and rides along the bottom edge — still horizontally centred, never
- * pushed up top, and never taking room from the cards.
+ * The hand's label is the bottom entry in the seat's column of labels, under
+ * the battlefield heading, so it leaves the flow and holds the box's middle-left
+ * whether the hand is empty or full. It matches .battlefield-heading's type and
+ * inset because the three only read as one column if they agree on both.
+ *
+ * It sits inside the box, so nothing clips it; --hand-label-gutter keeps the
+ * cards off it, and the ellipsis keeps a long opponent name from reaching past
+ * the strip it was given.
  */
-.hand-zone:has(.board-card) .zone-label {
+.hand-zone .zone-label {
   position: absolute;
   z-index: 2;
-  bottom: 2px;
-  left: 50%;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(var(--ground-rgb), 0.72);
-  font-size: 0.55rem;
-  opacity: 0.75;
+  top: 50%;
+  left: calc(var(--label-inset) - 1px);
+  max-width: calc(var(--hand-label-gutter) - 12px);
+  overflow: hidden;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
   pointer-events: none;
-  transform: translateX(-50%);
-  backdrop-filter: blur(3px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(-50%);
 }
 
 .hand-zone .board-card {
   height: clamp(108px, 15.5vh, 142px);
   max-height: none;
   clip-path: inset(0 0 calc(100% - var(--hand-card-visible-height, 63px)) 0 round 5px);
-  transform: translateY(0);
-  transform-origin: top center;
+  /* Angle and lift come from arrangeHandFans; both default to nothing, so a
+     card outside a fanned hand still sits flat. Pivoting on the bottom edge
+     spreads the visible top strip, which is the part of the fan you read. */
+  transform: rotate(var(--hand-fan-angle, 0deg)) translateY(var(--hand-fan-lift, 0px));
+  transform-origin: center bottom;
   /* transform and clip-path MUST share a duration and easing — see the lift
      rule below, which relies on the two cancelling each other out. */
   transition:
@@ -2240,7 +2311,9 @@ body.editing-mode .seat-edit-actions {
 .hand-zone .board-card:not(.dragging):not(.pointer-dragging):focus-visible {
   z-index: 45;
   clip-path: inset(0 round 5px);
-  transform: translateY(calc(var(--hand-card-visible-height, 63px) - 100%));
+  transform:
+    rotate(var(--hand-fan-angle, 0deg))
+    translateY(calc(var(--hand-card-visible-height, 63px) - 100% + var(--hand-fan-lift, 0px)));
   filter: drop-shadow(0 14px 18px rgba(var(--shadow-rgb), 0.72)) drop-shadow(0 0 12px rgba(var(--gold-rgb), 0.32));
 }
 
@@ -2363,15 +2436,50 @@ body.editing-mode .seat-edit-actions {
   .graveyard-viewer-card { animation: none; }
 }
 
+/*
+ * Deliberately paints nothing. A trigger fires because of what is on the board,
+ * so the board has to stay readable while you answer it -- dimming and blurring
+ * hid the very thing the panel is talking about. The layer itself stays: it
+ * still swallows board clicks until the trigger is resolved, which the upkeep
+ * prompt and the queue drain both rely on.
+ */
 .trigger-viewer-backdrop {
   position: fixed;
   z-index: 76;
   inset: 0;
-  background: rgba(var(--shadow-rgb), 0.78);
-  backdrop-filter: blur(5px);
 }
 .trigger-viewer-backdrop[hidden],
+.trigger-stack[hidden],
 .trigger-viewer[hidden] { display: none; }
+
+/*
+ * The triggers still waiting their turn. Each is the same shape as the live
+ * panel and sits a centimetre further right and up per place in the queue, so
+ * four triggers read as four without four of them having to be legible at once.
+ * Inert throughout: nothing here is focusable or clickable.
+ */
+.trigger-stack-card {
+  position: fixed;
+  z-index: 76;
+  top: 50%;
+  left: 50%;
+  width: min(650px, calc(100vw - 30px));
+  border: 1px solid rgba(111, 199, 161, 0.58);
+  border-radius: 12px;
+  background: linear-gradient(145deg, var(--surface-1), var(--surface-2));
+  box-shadow: 0 28px 90px rgba(var(--shadow-rgb), 0.75);
+  pointer-events: none;
+  transform: translate(
+    calc(-50% + var(--trigger-stack-depth) * 1cm),
+    calc(-50% - var(--trigger-stack-depth) * 1cm)
+  );
+}
+
+/* A queued death trigger keeps its colour so the stack shows what kind waits. */
+.trigger-stack-card.death-trigger-shell {
+  border-color: rgba(225, 91, 91, 0.78);
+  background: linear-gradient(145deg, #291417, #0b0809);
+}
 .trigger-viewer {
   position: fixed;
   z-index: 77;
@@ -2409,6 +2517,26 @@ body.editing-mode .seat-edit-actions {
   55% { opacity: 1; transform: translate(-50%, -52%) scale(1.025); filter: grayscale(0); }
   100% { transform: translate(-50%, -50%) scale(1); }
 }
+/*
+ * The snapshot that flies back into the permanent on resolve. Placed after the
+ * death-trigger rules so it wins the transform and animation those set: the
+ * ghost is positioned from measured pixels and driven entirely by WAAPI, so the
+ * panel's own centring and entrance must not apply to it.
+ */
+.trigger-viewer.trigger-morph-ghost {
+  position: fixed;
+  z-index: 78;
+  right: auto;
+  bottom: auto;
+  margin: 0;
+  overflow: hidden;
+  animation: none;
+  pointer-events: none;
+  transform: none;
+  transform-origin: center center;
+  will-change: transform, opacity;
+}
+
 .trigger-condition { margin: 0 0 10px; color: var(--muted); font-size: 0.7rem; }
 .trigger-effect {
   padding: 12px;
@@ -3431,6 +3559,11 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
 }
 
 @media (max-width: 720px) {
+  .game-board {
+    --turn-dock-width: 214px;
+    --turn-dock-right: 12px;
+  }
+
   .player-side {
     padding: 10px 12px;
     gap: 8px;
@@ -3497,9 +3630,7 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
   }
 
   .phase-list {
-    overflow-x: auto;
-    grid-template-columns: repeat(7, minmax(62px, 1fr));
-    scrollbar-width: none;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .phase-step {
@@ -3540,6 +3671,14 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
     padding-inline: 10px;
   }
 
+  .player-side {
+    --hand-label-gutter: 84px;
+  }
+
+  .hand-zone:has(.board-card) {
+    padding-inline: var(--hand-label-gutter) 10px;
+  }
+
   .board-card {
     height: clamp(58px, 13vh, 108px);
   }
@@ -3547,7 +3686,8 @@ body:has(.board-card.pointer-dragging) .card-hover-preview {
 
 @media (max-height: 680px) {
   .game-board {
-    grid-template-rows: minmax(0, 1fr) 46px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 8px minmax(0, 1fr);
+    --turn-dock-bottom: 64px;
   }
 
   .player-side {
